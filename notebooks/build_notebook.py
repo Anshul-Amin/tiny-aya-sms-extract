@@ -914,7 +914,7 @@ Training path: `{FT_INFO['path']}` · prompt format: `{FT_FORMAT}` · {FT_INFO['
 ''')
 
 code(r'''
-if PUSH_TO_HUB:
+def _push_model_and_data():
     # ---- model: LoRA adapter (+ card) ----
     api.create_repo(MODEL_REPO, repo_type="model", exist_ok=True)
     art = FT_INFO["artifact"]
@@ -963,6 +963,13 @@ Also included: `results/` (every model prediction, metrics, curation report from
         api.upload_folder(folder_path=f"{WORK}/curated", path_in_repo="curatorkit_run", repo_id=DATA_REPO,
                           repo_type="dataset", allow_patterns=["**/*.json", "**/*.md", "**/*.txt", "**/*.jsonl"])
     print("uploaded", DATA_REPO)
+
+if PUSH_TO_HUB:
+    try:
+        _push_model_and_data()
+    except Exception:
+        traceback.print_exc()
+        print("⚠️ upload failed; results are still saved in the working directory and can be uploaded later")
 ''')
 
 md("### GGUF export for the free CPU demo\nMerge the adapter into the base model, then convert with llama.cpp to `Q8_0` (no compilation needed). The demo Space runs this on 2 free vCPUs.")
