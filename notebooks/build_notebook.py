@@ -324,7 +324,12 @@ code(r'''
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
-BF16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+# T4 (compute capability 7.5) reports bf16 as "supported" but only EMULATES it, ~10x slower.
+# Use native bf16 only on Ampere+ (capability >= 8.0); otherwise fp16.
+BF16 = torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 8
+print("GPU:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "none",
+      "| capability:", torch.cuda.get_device_capability(0) if torch.cuda.is_available() else "-",
+      "| dtype:", "bfloat16" if BF16 else "float16")
 DTYPE = torch.bfloat16 if BF16 else torch.float16
 tok = AutoTokenizer.from_pretrained(BASE_MODEL)
 tok.padding_side = "left"
@@ -443,7 +448,7 @@ def generate(prompts, mdl, batch=GEN_BATCH, max_new=MAX_NEW_TOKENS):
 model = load_base()
 probe = generate([to_prompt(build_messages("Rs.450.00 debited from A/c XX1234 on 14-11-26 to SWIGGY via UPI. Avl bal Rs.12,340.50"))], model)[0]
 print("probe output:", probe[:300])
-if not probe.strip():
+if S.extract_json(probe) is None:   # empty or garbled output -> fp16 overflow guard
     print("⚠️ empty output in", DTYPE, "-> reloading in float32 (fp16 overflow guard)")
     del model; gc.collect(); torch.cuda.empty_cache()
     DTYPE = torch.float32
