@@ -63,7 +63,7 @@ SPACE_ADD_TOKEN = False  # True = store your HF token as a Space secret (only ne
 
 N_TRAIN, N_DEV, N_TEST_ID, N_TEST_OOD = 2400, 200, 400, 400
 MAX_NEW_TOKENS = 160
-GEN_BATCH      = 16
+GEN_BATCH      = 32
 LORA_R, LORA_ALPHA, LORA_DROPOUT = 16, 32, 0.05
 LR, EPOCHS, TRAIN_BATCH, GRAD_ACCUM, MAX_SEQ_LEN = 2e-4, 1, 4, 4, 512
 
@@ -331,8 +331,11 @@ tok.padding_side = "left"
 if tok.pad_token is None:
     tok.pad_token = tok.eos_token
 
+# One GPU holds the 3.35B model easily; splitting it across Kaggle's 2 GPUs only adds latency.
+DEVICE_MAP = {"": 0} if torch.cuda.is_available() else "cpu"
+
 def load_base(dtype=DTYPE):
-    m = AutoModelForCausalLM.from_pretrained(BASE_MODEL, torch_dtype=dtype, device_map="auto")
+    m = AutoModelForCausalLM.from_pretrained(BASE_MODEL, torch_dtype=dtype, device_map=DEVICE_MAP)
     m.eval()
     return m
 
@@ -348,6 +351,35 @@ def to_prompt(messages):
 def alpaca_prompt(sms):
     return f"### Instruction:\n{SYSTEM_PROMPT}\n\n### Input:\nSMS: {sms}\n\n### Response:\n"
 
+from transformers import StoppingCriteria, StoppingCriteriaList
+
+def json_closed(text):
+    """True once the text contains one complete top-level JSON object."""
+    start = text.find("{")
+    if start < 0:
+        return False
+    depth, in_str, esc = 0, False, False
+    for c in text[start:]:
+        if in_str:
+            if esc: esc = False
+            elif c == "\\": esc = True
+            elif c == '"': in_str = False
+        elif c == '"': in_str = True
+        elif c == "{": depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return True
+    return False
+
+class StopAfterJson(StoppingCriteria):
+    """Per-sequence stop as soon as a full JSON object has been generated (saves ~half the decode time)."""
+    def __init__(self, prompt_len):
+        self.prompt_len = prompt_len
+    def __call__(self, input_ids, scores, **kwargs):
+        texts = tok.batch_decode(input_ids[:, self.prompt_len:], skip_special_tokens=True)
+        return torch.tensor([json_closed(t) for t in texts], device=input_ids.device)
+
 @torch.no_grad()
 def generate(prompts, mdl, batch=GEN_BATCH, max_new=MAX_NEW_TOKENS):
     res = [None] * len(prompts)
@@ -356,10 +388,11 @@ def generate(prompts, mdl, batch=GEN_BATCH, max_new=MAX_NEW_TOKENS):
         idx = order[b:b + batch]
         enc = tok([prompts[i] for i in idx], return_tensors="pt", padding=True,
                   add_special_tokens=False).to(mdl.device)
-        out = mdl.generate(**enc, max_new_tokens=max_new, do_sample=False,
-                           pad_token_id=tok.pad_token_id)
+        plen = enc["input_ids"].shape[1]
+        out = mdl.generate(**enc, max_new_tokens=max_new, do_sample=False, pad_token_id=tok.pad_token_id,
+                           stopping_criteria=StoppingCriteriaList([StopAfterJson(plen)]))
         for j, i in enumerate(idx):
-            res[i] = tok.decode(out[j, enc["input_ids"].shape[1]:], skip_special_tokens=True)
+            res[i] = tok.decode(out[j, plen:], skip_special_tokens=True)
     return res
 
 model = load_base()
@@ -553,7 +586,7 @@ def train_aligntune(rows, out_dir):
 def train_trl_fallback(rows, out_dir):
     from peft import LoraConfig
     from trl import SFTTrainer, SFTConfig
-    base = AutoModelForCausalLM.from_pretrained(BASE_MODEL, torch_dtype=DTYPE, device_map="auto")
+    base = AutoModelForCausalLM.from_pretrained(BASE_MODEL, torch_dtype=DTYPE, device_map=DEVICE_MAP)
     cfg_kw = dict(output_dir=out_dir, num_train_epochs=EPOCHS, per_device_train_batch_size=TRAIN_BATCH,
                   gradient_accumulation_steps=GRAD_ACCUM, learning_rate=LR, lr_scheduler_type="cosine",
                   warmup_ratio=0.05, logging_steps=10, save_strategy="no", report_to="none", seed=SEED,
@@ -605,12 +638,12 @@ def save_train_log(log, tag):
 def load_finetuned(info):
     from peft import PeftModel
     art = info["artifact"]
-    base = AutoModelForCausalLM.from_pretrained(BASE_MODEL, torch_dtype=DTYPE, device_map="auto")
+    base = AutoModelForCausalLM.from_pretrained(BASE_MODEL, torch_dtype=DTYPE, device_map=DEVICE_MAP)
     if art and os.path.exists(os.path.join(art, "adapter_config.json")):
         m = PeftModel.from_pretrained(base, art)
     else:
         del base; gc.collect(); torch.cuda.empty_cache()
-        m = AutoModelForCausalLM.from_pretrained(art, torch_dtype=DTYPE, device_map="auto")
+        m = AutoModelForCausalLM.from_pretrained(art, torch_dtype=DTYPE, device_map=DEVICE_MAP)
     m.eval()
     return m
 
