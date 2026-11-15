@@ -113,7 +113,7 @@ if "transformers" in sys.modules:
 OK_ALIGN   = pip("aligntune")
 OK_CURATOR = pip("curatorkit")
 OK_AUDIT   = pip("auditkit")
-pip("peft", "trl", "accelerate", "datasets", "huggingface_hub", "matplotlib")
+pip("peft", "trl", "accelerate", "datasets", "huggingface_hub", "matplotlib", "bitsandbytes")
 
 # Check Tiny Aya support in a SEPARATE process, so an upgrade never mixes two transformers
 # versions inside this kernel (that causes "cannot import name ... from transformers.utils").
@@ -160,7 +160,7 @@ api = HfApi()
 ''')
 
 md("## 2. Project source files (generator, scoring, regex baseline, challenge set)\nThese are the same files as in the GitHub repo, embedded so the notebook runs on its own.")
-for path in ["src/smsgen.py", "src/scoring.py", "src/regex_baseline.py"]:
+for path in ["src/smsgen.py", "src/scoring.py", "src/regex_baseline.py", "src/train_worker.py"]:
     content = read(path)
     code(f"# ---- {path} ----\nCONTENT = {content!r}\n"
          f"open(f\"{{WORK}}/{path}\", \"w\", encoding=\"utf-8\").write(CONTENT)\n"
@@ -568,108 +568,70 @@ def get_log_history(trainer):
             return _jsonable(st.log_history)
     return None
 
-def train_aligntune(rows, out_dir):
-    from aligntune.core.backend_factory import create_sft_trainer
-    data_dir = f"{out_dir}_data"
+def write_train_data(rows, data_dir):
+    os.makedirs(data_dir, exist_ok=True)
     ds_full = build_train_dataset(rows)
-    variants = {
-        "messages": ds_full.select_columns(["messages"]),
-        "text": ds_full.select_columns(["text"]),
-        "alpaca": ds_full.select_columns(["instruction", "input", "output"]),
-    }
-    params = inspect.signature(create_sft_trainer).parameters
-    explicit = {k for k, p in params.items() if p.kind not in (p.VAR_KEYWORD, p.VAR_POSITIONAL)}
-    has_kwargs = any(p.kind == p.VAR_KEYWORD for p in params.values())
-    print("create_sft_trainer parameters:", sorted(explicit), "| **kwargs:", has_kwargs)
-    core = dict(model_name=BASE_MODEL, backend="trl", num_epochs=EPOCHS, max_steps=-1,
-                batch_size=TRAIN_BATCH, learning_rate=LR)
-    extra = dict(output_dir=out_dir, max_seq_length=MAX_SEQ_LEN, gradient_accumulation_steps=GRAD_ACCUM,
-                 use_peft=True, peft=True, use_lora=True, lora_r=LORA_R, lora_alpha=LORA_ALPHA,
-                 lora_dropout=LORA_DROPOUT, gradient_checkpointing=True, seed=SEED,
-                 fp16=not BF16, bf16=BF16, logging_steps=10, save_strategy="no", report_to="none")
-    last_err = None
-    for fmt, d in variants.items():
-        path = f"{data_dir}/{fmt}"
-        d.to_json(f"{path}.jsonl", force_ascii=False)
-        for ds_ref in [f"{path}.jsonl", path]:
-            if ds_ref == path:
-                d.save_to_disk(path)
-            kw = dict(core, dataset_name=ds_ref)
-            if fmt == "text":
-                extra_fmt = dict(dataset_text_field="text", text_field="text")
-            else:
-                extra_fmt = {}
-            for k, v in {**extra, **extra_fmt}.items():
-                if k in explicit:
-                    kw[k] = v
-            try:
-                print(f"AlignTune attempt: format={fmt} dataset={ds_ref} args={sorted(kw)}")
-                trainer = create_sft_trainer(**kw)
-                trainer.train()
-                saved = None
-                for obj in (trainer, getattr(trainer, "trainer", None)):
-                    m = getattr(obj, "model", None) if obj is not None else None
-                    if m is not None and hasattr(m, "save_pretrained"):
-                        m.save_pretrained(f"{out_dir}/final"); saved = f"{out_dir}/final"; break
-                for meth in ("save_model", "save"):
-                    if saved is None and hasattr(trainer, meth):
-                        try:
-                            getattr(trainer, meth)(f"{out_dir}/final"); saved = f"{out_dir}/final"
-                        except Exception:
-                            pass
-                art = find_artifact(out_dir) or saved
-                try:
-                    ev = trainer.evaluate()
-                except Exception:
-                    ev = None
-                return {"path": "aligntune", "format": fmt, "dataset_ref": ds_ref, "artifact": art,
-                        "args": {k: str(v) for k, v in kw.items()}, "aligntune_eval": _jsonable(ev),
-                        "log_history": get_log_history(trainer)}
-            except Exception as e:
-                last_err = e
-                print("  failed:", str(e)[:400])
-                gc.collect(); torch.cuda.empty_cache()
-                if "out of memory" in str(e).lower():
-                    raise RuntimeError("AlignTune ran out of GPU memory (likely full fine-tuning)") from e
-    raise RuntimeError(f"AlignTune could not train: {last_err}")
+    paths = {}
+    for fmt, cols in {"messages": ["messages"], "text": ["text"], "alpaca": ["instruction", "input", "output"]}.items():
+        paths[fmt] = f"{data_dir}/{fmt}.jsonl"
+        ds_full.select_columns(cols).to_json(paths[fmt], force_ascii=False)
+    return paths
 
-def train_trl_fallback(rows, out_dir):
-    from peft import LoraConfig
-    from trl import SFTTrainer, SFTConfig
-    base = AutoModelForCausalLM.from_pretrained(BASE_MODEL, torch_dtype=DTYPE, device_map=DEVICE_MAP)
-    cfg_kw = dict(output_dir=out_dir, num_train_epochs=EPOCHS, per_device_train_batch_size=TRAIN_BATCH,
-                  gradient_accumulation_steps=GRAD_ACCUM, learning_rate=LR, lr_scheduler_type="cosine",
-                  warmup_ratio=0.05, logging_steps=10, save_strategy="no", report_to="none", seed=SEED,
-                  fp16=not BF16 and DTYPE != torch.float32, bf16=BF16, gradient_checkpointing=True)
-    sig = inspect.signature(SFTConfig).parameters
-    cfg_kw["max_length" if "max_length" in sig else "max_seq_length"] = MAX_SEQ_LEN
-    trainer = SFTTrainer(model=base, args=SFTConfig(**cfg_kw),
-                         train_dataset=build_train_dataset(rows).select_columns(["messages"]),
-                         processing_class=tok,
-                         peft_config=LoraConfig(r=LORA_R, lora_alpha=LORA_ALPHA, lora_dropout=LORA_DROPOUT,
-                                                target_modules="all-linear", task_type="CAUSAL_LM"))
-    trainer.train()
-    trainer.model.save_pretrained(f"{out_dir}/final")
-    return {"path": "trl_fallback", "format": "messages", "artifact": f"{out_dir}/final",
-            "log_history": get_log_history(trainer)}
+def run_worker(cfg, tag):
+    """Train in a separate Python process: GPU memory is always fully released afterwards."""
+    cfg_path = f"{WORK}/models/{tag}_{cfg['mode']}_cfg.json"
+    cfg["result_path"] = cfg_path.replace("_cfg.json", "_result.json")
+    json.dump(cfg, open(cfg_path, "w"), indent=1)
+    env = dict(os.environ, PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True", CUDA_VISIBLE_DEVICES="0",
+               TOKENIZERS_PARALLELISM="false")
+    proc = subprocess.Popen([sys.executable, f"{WORK}/src/train_worker.py", cfg_path], env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    for line in proc.stdout:                 # stream the trainer's own log into this notebook
+        if "it/s]" in line or "s/it]" in line:
+            continue
+        print(line, end="")
+    proc.wait()
+    try:
+        return json.load(open(cfg["result_path"]))
+    except Exception as e:
+        return {"ok": False, "path": cfg["mode"], "error": f"worker crashed (exit {proc.returncode}): {e}"}
 
 def finetune(rows, tag):
     out_dir = f"{WORK}/models/{tag}"
     free_gpu()
+    data = write_train_data(rows, f"{out_dir}_data")
     t0 = time.time()
-    info = None
+    attempts, info = [], None
     if OK_ALIGN:
-        try:
-            info = train_aligntune(rows, out_dir)
-        except Exception as e:
-            traceback.print_exc()
-            print("⚠️ AlignTune path failed -> TRL+PEFT fallback (recorded in report)")
+        lora = dict(use_peft=True, lora_r=LORA_R, lora_alpha=LORA_ALPHA, lora_dropout=LORA_DROPOUT)
+        common = dict(model_name=BASE_MODEL, backend="trl", num_epochs=EPOCHS, max_steps=-1,
+                      batch_size=TRAIN_BATCH, learning_rate=LR, max_seq_length=MAX_SEQ_LEN,
+                      gradient_accumulation_steps=GRAD_ACCUM, gradient_checkpointing=True,
+                      fp16=not BF16, bf16=BF16, output_dir=out_dir, save_interval=100000, **lora)
+        for label, extra in [("lora_fp16", dict(precision="float16" if not BF16 else "bfloat16")),
+                             ("qlora_4bit", dict(quantization={"load_in_4bit": True}))]:
+            print(f"--- AlignTune attempt: {label} ---")
+            res = run_worker(dict(mode="aligntune", out_dir=f"{out_dir}/{label}", data=data, base_model=BASE_MODEL,
+                                  kwargs=dict(common, output_dir=f"{out_dir}/{label}", **extra)), tag)
+            attempts.append({"attempt": label, **{k: v for k, v in res.items() if k != "log_history"}})
+            if res.get("ok") and res.get("artifact"):
+                info = dict(res, attempt=label)
+                break
     if info is None:
-        info = train_trl_fallback(rows, out_dir)
+        print("⚠️ AlignTune could not train here -> TRL + PEFT LoRA fallback with identical settings (recorded)")
+        res = run_worker(dict(mode="trl", out_dir=f"{out_dir}/trl", data=data, base_model=BASE_MODEL,
+                              trl=dict(epochs=EPOCHS, batch=TRAIN_BATCH, grad_accum=GRAD_ACCUM, lr=LR,
+                                       max_len=MAX_SEQ_LEN, lora_r=LORA_R, lora_alpha=LORA_ALPHA,
+                                       lora_dropout=LORA_DROPOUT, seed=SEED, bf16=BF16)), tag)
+        attempts.append({"attempt": "trl_fallback", **{k: v for k, v in res.items() if k != "log_history"}})
+        if not res.get("ok"):
+            raise RuntimeError(f"All training attempts failed: {attempts}")
+        info = res
+    info["attempts"] = attempts
     info["train_minutes"] = round((time.time() - t0) / 60, 1)
     info["n_train"] = len(rows)
     save_train_log(info.pop("log_history", None), tag)
-    print(json.dumps(info, indent=1))
+    print(json.dumps(info, indent=1, default=str)[:3000])
     return info
 
 def save_train_log(log, tag):

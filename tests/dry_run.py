@@ -90,9 +90,14 @@ model = "base"
 '''
 MOCK_FT_CELL = r'''
 def free_gpu(): pass
-def train_trl_fallback(rows, out_dir):
-    return {"path": "trl_fallback", "format": "messages", "artifact": f"{out_dir}/final",
+def write_train_data(rows, data_dir):
+    return {"messages": "m.jsonl", "text": "t.jsonl", "alpaca": "a.jsonl"}
+def run_worker(cfg, tag):
+    if cfg["mode"] == "aligntune" and "lora_fp16" in cfg["out_dir"]:
+        return {"ok": False, "path": "aligntune", "error": "CUDA out of memory (simulated)"}
+    return {"ok": True, "path": cfg["mode"], "format": "messages", "artifact": cfg["out_dir"] + "/final",
             "log_history": [{"step": i * 10, "loss": 2.0 / (i + 1)} for i in range(15)]}
+OK_ALIGN = True
 def load_finetuned(info):
     return "abl" if "ablation" in info["artifact"] else "ft"
 '''
