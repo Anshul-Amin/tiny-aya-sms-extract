@@ -407,18 +407,37 @@ def _generate_fast(mdl, enc, plen, max_new):
             last = e
     raise last
 
+GEN_TOKEN_BUDGET = 12000   # max (batch x padded prompt length) per batch: fits a 16 GB T4 with room for the KV cache
+
 @torch.no_grad()
-def generate(prompts, mdl, batch=GEN_BATCH, max_new=MAX_NEW_TOKENS):
-    res = [None] * len(prompts)
-    order = sorted(range(len(prompts)), key=lambda i: len(prompts[i]))   # length bucketing
-    for b in range(0, len(order), batch):
-        idx = order[b:b + batch]
-        enc = tok([prompts[i] for i in idx], return_tensors="pt", padding=True,
-                  add_special_tokens=False).to(mdl.device)
-        plen = enc["input_ids"].shape[1]
+def _run_batch(prompts, mdl, max_new):
+    enc = tok(prompts, return_tensors="pt", padding=True, add_special_tokens=False).to(mdl.device)
+    plen = enc["input_ids"].shape[1]
+    try:
         out = _generate_fast(mdl, enc, plen, max_new)
-        for j, i in enumerate(idx):
-            res[i] = tok.decode(out[j, plen:], skip_special_tokens=True)
+    except torch.cuda.OutOfMemoryError:
+        del enc
+        gc.collect(); torch.cuda.empty_cache()
+        if len(prompts) == 1:
+            raise
+        half = len(prompts) // 2           # split and retry instead of crashing the run
+        return _run_batch(prompts[:half], mdl, max_new) + _run_batch(prompts[half:], mdl, max_new)
+    return [tok.decode(out[j, plen:], skip_special_tokens=True) for j in range(len(prompts))]
+
+def generate(prompts, mdl, batch=GEN_BATCH, max_new=MAX_NEW_TOKENS):
+    lens = [len(tok(p, add_special_tokens=False)["input_ids"]) for p in prompts]
+    order = sorted(range(len(prompts)), key=lambda i: lens[i])   # length bucketing
+    res, cur = [None] * len(prompts), []
+    def flush():
+        if cur:
+            for i, o in zip(cur, _run_batch([prompts[i] for i in cur], mdl, max_new)):
+                res[i] = o
+            cur.clear()
+    for i in order:
+        if cur and (len(cur) >= batch or (len(cur) + 1) * (lens[i] + max_new) > GEN_TOKEN_BUDGET):
+            flush()
+        cur.append(i)
+    flush()
     return res
 
 model = load_base()
