@@ -61,7 +61,7 @@ MAKE_GGUF   = True    # export a CPU-friendly GGUF for the free demo Space
 PUSH_TO_HUB = True    # create HF model/dataset repos, collections and the demo Space
 SPACE_ADD_TOKEN = False  # True = store your HF token as a Space secret (only needed if GGUF export fails)
 
-N_TRAIN, N_DEV, N_TEST_ID, N_TEST_OOD = 2400, 200, 400, 400
+N_TRAIN, N_DEV, N_TEST_ID, N_TEST_OOD = 1600, 120, 300, 300   # sized to fit one free T4 session
 MAX_NEW_TOKENS = 160
 GEN_BATCH      = 32
 LORA_R, LORA_ALPHA, LORA_DROPOUT = 16, 32, 0.05
