@@ -380,6 +380,33 @@ class StopAfterJson(StoppingCriteria):
         texts = tok.batch_decode(input_ids[:, self.prompt_len:], skip_special_tokens=True)
         return torch.tensor([json_closed(t) for t in texts], device=input_ids.device)
 
+# Tiny Aya's config sets cache_implementation="hybrid" (a static cache). Recent transformers then
+# torch.compile the forward pass and RECOMPILE for every new batch shape (~1 min per batch on a T4).
+# A dynamic cache with compilation disabled is ~10x faster for our short, varied prompts.
+GEN_EXTRA = None
+_GEN_CANDIDATES = [dict(cache_implementation="dynamic", disable_compile=True),
+                   dict(cache_implementation="dynamic"),
+                   dict(disable_compile=True),
+                   dict()]
+
+def _generate_fast(mdl, enc, plen, max_new):
+    global GEN_EXTRA
+    base = dict(max_new_tokens=max_new, do_sample=False, pad_token_id=tok.pad_token_id,
+                stopping_criteria=StoppingCriteriaList([StopAfterJson(plen)]))
+    if GEN_EXTRA is not None:
+        return mdl.generate(**enc, **base, **GEN_EXTRA)
+    last = None
+    for extra in _GEN_CANDIDATES:
+        try:
+            t0 = time.time()
+            out = mdl.generate(**enc, **base, **extra)
+            GEN_EXTRA = extra
+            print(f"generation settings: {extra or 'model defaults'} (first batch {time.time() - t0:.1f}s)")
+            return out
+        except (TypeError, ValueError) as e:
+            last = e
+    raise last
+
 @torch.no_grad()
 def generate(prompts, mdl, batch=GEN_BATCH, max_new=MAX_NEW_TOKENS):
     res = [None] * len(prompts)
@@ -389,8 +416,7 @@ def generate(prompts, mdl, batch=GEN_BATCH, max_new=MAX_NEW_TOKENS):
         enc = tok([prompts[i] for i in idx], return_tensors="pt", padding=True,
                   add_special_tokens=False).to(mdl.device)
         plen = enc["input_ids"].shape[1]
-        out = mdl.generate(**enc, max_new_tokens=max_new, do_sample=False, pad_token_id=tok.pad_token_id,
-                           stopping_criteria=StoppingCriteriaList([StopAfterJson(plen)]))
+        out = _generate_fast(mdl, enc, plen, max_new)
         for j, i in enumerate(idx):
             res[i] = tok.decode(out[j, plen:], skip_special_tokens=True)
     return res
