@@ -94,22 +94,46 @@ def pip(*args):
         print(r.stderr[-2000:])
     return r.returncode == 0
 
-print(sys.version)
+# make the HF token visible to subprocesses (the Tiny Aya config is gated)
+if not os.environ.get("HF_TOKEN"):
+    for getter in ("kaggle", "colab"):
+        try:
+            if getter == "kaggle":
+                from kaggle_secrets import UserSecretsClient
+                os.environ["HF_TOKEN"] = UserSecretsClient().get_secret("HF_TOKEN")
+            else:
+                from google.colab import userdata
+                os.environ["HF_TOKEN"] = userdata.get("HF_TOKEN")
+            break
+        except Exception:
+            pass
+print(sys.version, "| HF token found:", bool(os.environ.get("HF_TOKEN")))
+if "transformers" in sys.modules:
+    print("⚠️ transformers is already imported in this kernel. Run -> Restart kernel, then Run All again.")
 OK_ALIGN   = pip("aligntune")
 OK_CURATOR = pip("curatorkit")
 OK_AUDIT   = pip("auditkit")
 pip("peft", "trl", "accelerate", "datasets", "huggingface_hub", "matplotlib")
 
-import torch, transformers
+# Check Tiny Aya support in a SEPARATE process, so an upgrade never mixes two transformers
+# versions inside this kernel (that causes "cannot import name ... from transformers.utils").
+def _subprocess_check():
+    code = ("import transformers, torch; from transformers import AutoConfig; "
+            f"AutoConfig.from_pretrained('{BASE_MODEL}', token=__import__('os').environ.get('HF_TOKEN')); "
+            "print(transformers.__version__, torch.__version__)")
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    return r.returncode == 0, (r.stdout or r.stderr).strip()[-600:]
+
+ok, msg = _subprocess_check()
+if not ok and "gated" not in msg.lower() and "401" not in msg:
+    print("transformers can't read the Tiny Aya config -> upgrading (before importing it here):", msg[-200:])
+    pip("-U", "transformers")
+    ok, msg = _subprocess_check()
+print("Tiny Aya config check:", "OK" if ok else "FAILED", "|", msg[-300:])
+
+import torch, transformers   # first import in this kernel -> always the final installed version
 print("torch", torch.__version__, "| transformers", transformers.__version__,
       "| CUDA", torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else "")
-try:
-    from transformers import AutoConfig
-    AutoConfig.from_pretrained(BASE_MODEL)
-    print("transformers can read the Tiny Aya config")
-except Exception as e:
-    print("Config check failed -> upgrading transformers. If it still fails, restart the kernel.", e)
-    pip("-U", "transformers")
 ''')
 
 code(r'''
