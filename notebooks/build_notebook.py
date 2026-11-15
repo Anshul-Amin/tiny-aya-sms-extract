@@ -51,7 +51,7 @@ code(r'''
 import os, sys, json, time, math, random, subprocess, inspect, gc, glob, shutil, traceback
 
 HF_USERNAME = ""                      # leave empty -> taken from your HF token
-PROJECT     = "tiny-aya-sms-extract"  # prefix for all HF repos
+PROJECT     = "tiny-aya-sms-extract-v2"  # prefix for all HF repos (v2 = 3-epoch run; v1 repos are kept)
 BASE_MODEL  = "CohereLabs/tiny-aya-global"
 SEED        = 7
 
@@ -65,7 +65,7 @@ N_TRAIN, N_DEV, N_TEST_ID, N_TEST_OOD = 1600, 120, 300, 300   # sized to fit one
 MAX_NEW_TOKENS = 192   # raised to the longest gold answer + margin once the data exists (section 3)
 GEN_BATCH      = 32
 LORA_R, LORA_ALPHA, LORA_DROPOUT = 16, 32, 0.05
-LR, EPOCHS, TRAIN_BATCH, GRAD_ACCUM = 2e-4, 1, 2, 8   # effective batch 16
+LR, EPOCHS, TRAIN_BATCH, GRAD_ACCUM = 2e-4, 3, 2, 8   # effective batch 16; 3 epochs (1 epoch underfit: 69% EM on its own training data)
 MAX_SEQ_LEN = None   # None = measured from the data so that no answer is ever truncated (see finetune)
 
 # ROI assumptions (edit to your situation; sources in the article)
