@@ -1,3 +1,6 @@
+import py_compile, glob as _g
+for _f in _g.glob(__import__("os").path.join(__import__("os").path.dirname(__file__), "..", "src", "*.py")):
+    py_compile.compile(_f, doraise=True)   # the trainer runs in a subprocess the dry run mocks, so compile it here
 """CPU dry run of the notebook: real code for data, curation fallback, scoring, stats, charts,
 error analysis, ROI and report rendering; a fake model replaces Tiny Aya / training / uploads."""
 import json

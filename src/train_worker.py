@@ -122,7 +122,7 @@ def run_trl(cfg):
     ds = load_dataset("json", data_files=cfg["data"]["messages"], split="train")
     trainer = SFTTrainer(model=base, args=SFTConfig(**ck), train_dataset=ds, processing_class=tok,
                          peft_config=LoraConfig(r=t["lora_r"], lora_alpha=t["lora_alpha"],
-                                                lora_dropout=t["lora_dropout"], target_modules=["q_proj", "k_proj", "v_proj", "o_proj"]   # same as AlignTune's LoRA,
+                                                lora_dropout=t["lora_dropout"], target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
                                                 task_type="CAUSAL_LM"))
     trainer.train()
     trainer.model.save_pretrained(f"{cfg['out_dir']}/final")
