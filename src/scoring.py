@@ -110,7 +110,10 @@ def _norm_str(v):
 
 def _norm_alnum(v):
     s = _norm_str(v)
-    return re.sub(r"[^0-9a-z@.]", "", s) if s else None
+    if not s:
+        return None
+    s = "".join(ch for ch in s if ch in "@." or unicodedata.category(ch)[0] in "LMN")   # keeps Devanagari letters
+    return s or None
 
 
 def norm_field(k, v):

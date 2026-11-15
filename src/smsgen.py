@@ -54,18 +54,18 @@ T = {
     "upi_debit": {
         "meta": dict(is_txn=True, type="debit", status="success", inst=["UPI"], cp="upi_party"),
         "en": [
-            "Your A/c {acct} is debited for {amt}‖ on {date}‖ towards {cp}‖ via {inst}‖. UPI Ref No {ref}‖. Avl Bal {bal}",
-            "{bank}: {amt} debited from a/c {acct}‖ on {date}‖ to VPA {cp}{@inst}‖ (UPI Ref {ref})‖. Avl bal {bal}",
-            "Sent {amt} from {bank} A/c {acct} to {cp} on {date}{@inst}‖. Ref: {ref}‖. Bal: {bal}",
+            "Your A/c {acct} is debited for {amt}‖ on {date}‖ towards {cp}‖ via {inst}‖. UPI Ref No {ref}{@inst}‖. Avl Bal {bal}",
+            "{bank}: {amt} debited from a/c {acct}‖ on {date}‖ to VPA {cp}{@inst}‖ (UPI Ref {ref}{@inst})‖. Avl bal {bal}",
+            "Sent {amt} from {bank} A/c {acct} to {cp} on {date}‖. UPI Ref: {ref}{@inst}‖. Bal: {bal}",
         ],
         "hi": [
-            "आपके खाते {acct} से {amt} डेबिट किए गए‖ दिनांक {date}‖, {cp} को‖ {inst} द्वारा‖। UPI संदर्भ {ref}‖। उपलब्ध शेष {bal}",
-            "{bank}: खाता {acct} से {amt} {cp} को भेजे गए{@inst}‖ ({date})‖। संदर्भ संख्या {ref}‖। शेष राशि {bal}",
+            "आपके खाते {acct} से {amt} डेबिट किए गए‖ दिनांक {date}‖, {cp} को‖ {inst} द्वारा‖। UPI संदर्भ {ref}{@inst}‖। उपलब्ध शेष {bal}",
+            "{bank}: खाता {acct} से {amt} {cp} को UPI से भेजे गए{@inst}‖ ({date})‖। संदर्भ संख्या {ref}‖। शेष राशि {bal}",
             "{amt} का UPI भुगतान{@inst} {cp} को सफल रहा, खाता {acct}‖, दिनांक {date}‖। रेफ़ {ref}",
         ],
         "hinglish": [
-            "Aapke A/c {acct} se {amt} debit hue‖ {date} ko‖ {cp} ko‖ {inst} se‖. UPI Ref {ref}‖. Avl bal {bal}",
-            "{bank}: A/c {acct} se {amt} {cp} ko bheje gaye{@inst}‖ ({date})‖. Ref no {ref}‖. Bal {bal}",
+            "Aapke A/c {acct} se {amt} debit hue‖ {date} ko‖ {cp} ko‖ {inst} se‖. UPI Ref {ref}{@inst}‖. Avl bal {bal}",
+            "{bank}: A/c {acct} se {amt} {cp} ko UPI se bheje gaye{@inst}‖ ({date})‖. Ref no {ref}‖. Bal {bal}",
             "{amt} ka UPI payment{@inst} {cp} ko successful, A/c {acct}‖, date {date}‖. Ref {ref}",
         ],
     },
@@ -73,17 +73,17 @@ T = {
         "meta": dict(is_txn=True, type="credit", status="success", inst=["UPI"], cp="upi_party"),
         "en": [
             "Dear Customer, your A/c {acct} is credited with {amt}‖ on {date}‖ by {cp}‖ via {inst}‖. Ref {ref}‖. Avl Bal {bal}",
-            "{amt} received in {bank} a/c {acct} from {cp}{@inst}‖ on {date}‖. UPI Ref:{ref}",
+            "{amt} received in {bank} a/c {acct} from {cp}‖ on {date}‖. UPI Ref:{ref}{@inst}",
             "Money received! {cp} sent you {amt} via {inst}‖ on {date}‖. Credited to A/c {acct}‖. Bal {bal}",
         ],
         "hi": [
             "आपके खाते {acct} में {amt} जमा किए गए‖ दिनांक {date}‖, {cp} द्वारा‖ {inst} से‖। संदर्भ {ref}‖। उपलब्ध शेष {bal}",
-            "{cp} ने आपको {amt} भेजे{@inst}‖, खाता {acct} में जमा‖ ({date})‖। UPI रेफ़ {ref}",
+            "{cp} ने आपको {amt} भेजे‖, खाता {acct} में जमा‖ ({date})‖। UPI रेफ़ {ref}{@inst}",
             "खाता {acct} में {cp} से {amt} प्राप्त हुए‖ {date} को‖ {inst} द्वारा‖। शेष {bal}",
         ],
         "hinglish": [
             "Aapke A/c {acct} mein {amt} credit hue‖ {date} ko‖ {cp} se‖ {inst} dwara‖. Ref {ref}‖. Avl bal {bal}",
-            "{cp} ne aapko {amt} bheje{@inst}‖, A/c {acct} mein jama‖ ({date})‖. UPI Ref {ref}",
+            "{cp} ne aapko {amt} bheje‖, A/c {acct} mein jama‖ ({date})‖. UPI Ref {ref}{@inst}",
             "A/c {acct} mein {cp} se {amt} mile‖ {date} ko‖ {inst} se‖. Bal {bal}",
         ],
     },
@@ -181,17 +181,17 @@ T = {
         "meta": dict(is_txn=True, type="debit", status="failed", inst=["UPI"], cp="merchant"),
         "en": [
             "Txn of {amt} to {cp} via {inst} FAILED‖ on {date}‖. Amount, if debited, will be refunded‖. Ref {ref}",
-            "Your payment of {amt} to {cp} could not be processed{@inst}‖ (UPI Ref {ref})‖. A/c {acct} not debited",
+            "Your payment of {amt} to {cp} could not be processed‖ (UPI Ref {ref}{@inst})‖. A/c {acct} not debited",
             "Transaction declined: {amt} at {cp} on Card {card}‖ on {date}‖. Reason: insufficient balance",
         ],
         "hi": [
             "{inst} द्वारा {cp} को {amt} का लेनदेन विफल रहा‖, दिनांक {date}‖। अगर राशि कटी है तो वापस आ जाएगी‖। संदर्भ {ref}",
-            "{cp} को {amt} का आपका भुगतान नहीं हो सका{@inst}‖ (UPI रेफ़ {ref})‖। खाता {acct} से राशि नहीं कटी",
+            "{cp} को {amt} का आपका भुगतान नहीं हो सका‖ (UPI रेफ़ {ref}{@inst})‖। खाता {acct} से राशि नहीं कटी",
             "लेनदेन अस्वीकृत: कार्ड {card} से {cp} पर {amt}‖, {date}‖। कारण: अपर्याप्त शेष",
         ],
         "hinglish": [
             "{inst} se {cp} ko {amt} ka txn fail ho gaya‖ {date} ko‖. Paisa kata hai to wapas aa jayega‖. Ref {ref}",
-            "{cp} ko {amt} ka aapka payment nahi ho paya{@inst}‖ (UPI Ref {ref})‖. A/c {acct} se paisa nahi kata",
+            "{cp} ko {amt} ka aapka payment nahi ho paya‖ (UPI Ref {ref}{@inst})‖. A/c {acct} se paisa nahi kata",
             "Txn decline hua: Card {card} se {cp} par {amt}‖, {date}‖. Reason: balance kam hai",
         ],
     },

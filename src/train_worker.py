@@ -54,10 +54,24 @@ def save_trainer(trainer, final_dir):
     return None
 
 
+def training_diag(trainer):
+    """What the trainer actually saw: rows, tokens of example 0, BOS count, tail (must end with the JSON answer)."""
+    try:
+        t = getattr(trainer, "trainer", trainer)
+        tk = getattr(trainer, "tokenizer", None) or getattr(t, "processing_class", None)
+        ds = t.train_dataset
+        ids = ds[0]["input_ids"]
+        return {"n_rows": len(ds), "n_tok": len(ids), "bos_in_first4": sum(i == tk.bos_token_id for i in ids[:4]),
+                "tail": tk.decode(ids[-90:]), "max_length": getattr(t.args, "max_length", None),
+                "fp16": bool(t.args.fp16), "bf16": bool(t.args.bf16)}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"[:300]}
+
+
 def run_aligntune(cfg):
     from aligntune.core.backend_factory import create_sft_trainer
     errors = []
-    for fmt in ["messages", "text", "alpaca"]:
+    for fmt in ["messages"]:   # the other formats would not match the chat template used at inference
         path = cfg["data"][fmt]
         kw = dict(cfg["kwargs"], dataset_name=path)
         if fmt == "text":
@@ -66,9 +80,11 @@ def run_aligntune(cfg):
             print(f"[worker] AlignTune: format={fmt} kwargs={sorted(kw)}", flush=True)
             trainer = create_sft_trainer(**kw)
             trainer.train()
+            diag = training_diag(trainer)
+            print("[worker] diag:", json.dumps(diag, ensure_ascii=False)[:1500], flush=True)
             final = save_trainer(trainer, f"{cfg['out_dir']}/final")
             art = find_artifact(cfg["out_dir"]) or final
-            return {"ok": True, "path": "aligntune", "format": fmt, "artifact": art,
+            return {"ok": True, "path": "aligntune", "format": fmt, "artifact": art, "diag": diag,
                     "args": {k: str(v) for k, v in kw.items()}, "log_history": get_log_history(trainer)}
         except Exception as e:
             msg = f"{type(e).__name__}: {e}"
@@ -95,19 +111,25 @@ def run_trl(cfg):
     base = AutoModelForCausalLM.from_pretrained(cfg["base_model"], torch_dtype=dtype, device_map={"": 0})
     ck = dict(output_dir=cfg["out_dir"], num_train_epochs=t["epochs"], per_device_train_batch_size=t["batch"],
               gradient_accumulation_steps=t["grad_accum"], learning_rate=t["lr"], lr_scheduler_type="cosine",
-              warmup_ratio=0.05, logging_steps=10, save_strategy="no", report_to="none", seed=t["seed"],
+              logging_steps=10, save_strategy="no", report_to="none", seed=t["seed"],
               fp16=not bf16, bf16=bf16, gradient_checkpointing=True)
     sig = inspect.signature(SFTConfig).parameters
+    if "warmup_ratio" in sig:
+        ck["warmup_ratio"] = 0.05
+    else:                       # newer transformers: a fractional warmup_steps means a ratio
+        ck["warmup_steps"] = 0.05
     ck["max_length" if "max_length" in sig else "max_seq_length"] = t["max_len"]
     ds = load_dataset("json", data_files=cfg["data"]["messages"], split="train")
     trainer = SFTTrainer(model=base, args=SFTConfig(**ck), train_dataset=ds, processing_class=tok,
                          peft_config=LoraConfig(r=t["lora_r"], lora_alpha=t["lora_alpha"],
-                                                lora_dropout=t["lora_dropout"], target_modules="all-linear",
+                                                lora_dropout=t["lora_dropout"], target_modules=["q_proj", "k_proj", "v_proj", "o_proj"]   # same as AlignTune's LoRA,
                                                 task_type="CAUSAL_LM"))
     trainer.train()
     trainer.model.save_pretrained(f"{cfg['out_dir']}/final")
+    diag = training_diag(trainer)
+    print("[worker] diag:", json.dumps(diag, ensure_ascii=False)[:1500], flush=True)
     return {"ok": True, "path": "trl_fallback", "format": "messages", "artifact": f"{cfg['out_dir']}/final",
-            "log_history": get_log_history(trainer)}
+            "diag": diag, "log_history": get_log_history(trainer)}
 
 
 if __name__ == "__main__":

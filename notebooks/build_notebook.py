@@ -62,7 +62,7 @@ PUSH_TO_HUB = True    # create HF model/dataset repos, collections and the demo 
 SPACE_ADD_TOKEN = False  # True = store your HF token as a Space secret (only needed if GGUF export fails)
 
 N_TRAIN, N_DEV, N_TEST_ID, N_TEST_OOD = 1600, 120, 300, 300   # sized to fit one free T4 session
-MAX_NEW_TOKENS = 160
+MAX_NEW_TOKENS = 192   # raised to the longest gold answer + margin once the data exists (section 3)
 GEN_BATCH      = 32
 LORA_R, LORA_ALPHA, LORA_DROPOUT = 16, 32, 0.05
 LR, EPOCHS, TRAIN_BATCH, GRAD_ACCUM = 2e-4, 1, 2, 8   # effective batch 16
@@ -316,6 +316,10 @@ if curated_rows is None:
     curation["fallback"] = "pandas exact dedup"
 train_rows = curated_rows
 write_jsonl(f"{WORK}/data/train_curated.jsonl", train_rows)
+# generation budget: longest gold answer (pessimistic ~2.2 chars/token) + margin; StopAfterJson ends early anyway
+_longest = max(len(gold_to_str(r["gold"])) for k in splits for r in splits[k])
+MAX_NEW_TOKENS = max(MAX_NEW_TOKENS, int(_longest / 2.2) + 48)
+print("MAX_NEW_TOKENS:", MAX_NEW_TOKENS, "| longest gold answer:", _longest, "chars")
 json.dump(curation, open(f"{WORK}/results/curation_report.json", "w"), indent=1)
 print(json.dumps(curation, indent=1))
 ''')
@@ -449,7 +453,7 @@ def generate(prompts, mdl, batch=GEN_BATCH, max_new=MAX_NEW_TOKENS):
 model = load_base()
 probe = generate([to_prompt(build_messages("Rs.450.00 debited from A/c XX1234 on 14-11-26 to SWIGGY via UPI. Avl bal Rs.12,340.50"))], model)[0]
 print("probe output:", probe[:300])
-if S.extract_json(probe) is None:   # empty or garbled output -> fp16 overflow guard
+if not probe.strip() or "\ufffd" in probe:   # empty or garbage output -> fp16 overflow guard
     print("⚠️ empty output in", DTYPE, "-> reloading in float32 (fp16 overflow guard)")
     del model; gc.collect(); torch.cuda.empty_cache()
     DTYPE = torch.float32
@@ -509,7 +513,7 @@ def audit_and_score(system, split):
     if ak is not None:
         try:
             samples = [ak.Sample(input=r["sms"], target=gold_to_str(r["gold"])) for r in rows]
-            model_fn = lambda prompts: [CACHE.get((system, p)) or SYSTEMS[system]([p])[0] for p in prompts]
+            model_fn = lambda prompts: [CACHE[(system, p)] if (system, p) in CACHE else SYSTEMS[system]([p])[0] for p in prompts]
             result = ak.evaluate(samples, model=model_fn)
             AUDIT_RUNS[(system, split)] = result
             meta = {"auditkit": True, "headline": _jsonable(getattr(result, "headline", None)),
@@ -622,8 +626,9 @@ def finetune(rows, tag):
                       batch_size=TRAIN_BATCH, learning_rate=LR, max_seq_length=seq_len,
                       gradient_accumulation_steps=GRAD_ACCUM, gradient_checkpointing=True,
                       fp16=not BF16, bf16=BF16, output_dir=out_dir, save_interval=100000, **lora)
-        for label, extra in [("lora_fp16", dict(precision="float16" if not BF16 else "bfloat16")),
-                             ("qlora_4bit", dict(quantization={"load_in_4bit": True}))]:
+        prec = dict(precision="fp16" if not BF16 else "bf16")   # AlignTune accepts fp16|bf16|fp32|auto
+        for label, extra in [("lora_fp16", prec),
+                             ("qlora_4bit", dict(prec, quantization={"load_in_4bit": True}))]:
             print(f"--- AlignTune attempt: {label} ---")
             res = run_worker(dict(mode="aligntune", out_dir=f"{out_dir}/{label}", data=data, base_model=BASE_MODEL,
                                   kwargs=dict(common, output_dir=f"{out_dir}/{label}", **extra)), tag)
@@ -694,10 +699,21 @@ _em = S.aggregate([S.score_example(o, r["gold"]) for o, r in zip(_outs, _chk)])[
 print(f"sanity check on 16 training examples: exact match {_em:.2f}")
 print("example output:", repr(_outs[0][:300]))
 if _em < 0.5:
-    print("⚠️ the fine-tuned model does not reproduce its training answers: check max_seq_length / adapter loading")
+    print("⚠️⚠️ SANITY CHECK FAILED: the fine-tuned model does not reproduce its training answers "
+          "(check the [worker] diag line: tail must end with the JSON answer)")
+print("trainer diag:", json.dumps(FT_INFO.get("diag"), ensure_ascii=False)[:800])
 _build = (lambda x: to_prompt(build_messages(x))) if FT_FORMAT == "chat" else alpaca_prompt
 SYSTEMS["fine_tuned"] = lambda xs: generate([_build(x) for x in xs], model)
 evaluate_system("fine_tuned")
+
+# checkpoint: save the main results now, so a later crash can never lose them
+json.dump({f"{s}/{sp}": v["metrics"] for (s, sp), v in RESULTS.items()},
+          open(f"{WORK}/results/metrics_checkpoint.json", "w"), indent=1, default=str)
+for (s, sp), v in RESULTS.items():
+    write_jsonl(f"{WORK}/results/predictions_{s}_{sp}.jsonl",
+                [{"id": r["id"], "sms": r["sms"], "gold": r["gold"], "output": o, "exact_match": sc["exact_match"]}
+                 for r, o, sc in zip(splits[sp], v["outputs"], v["scored"])])
+print("checkpoint saved:", f"{WORK}/results/metrics_checkpoint.json")
 
 # throughput for the ROI section (batched greedy decoding on this GPU)
 sample = [r["sms"] for r in splits["test_id"][:min(128, len(splits["test_id"]))]]
@@ -718,12 +734,22 @@ if RUN_ABLATION:
     abl_rows = [e.to_json() for e in abl]
     write_jsonl(f"{WORK}/data/train_ablation_clean.jsonl", abl_rows)
     free_gpu()
-    ABL_INFO = finetune(abl_rows, "ft_ablation_clean")
-    json.dump(ABL_INFO, open(f"{WORK}/results/train_info_ablation.json", "w"), indent=1)
-    model_abl = load_finetuned(ABL_INFO)
-    SYSTEMS["ft_no_robust_data"] = lambda xs: generate([_build(x) for x in xs], model_abl)
-    evaluate_system("ft_no_robust_data")
-    del model_abl; gc.collect(); torch.cuda.empty_cache()
+    try:
+        ABL_INFO = finetune(abl_rows, "ft_ablation_clean")
+        json.dump(ABL_INFO, open(f"{WORK}/results/train_info_ablation.json", "w"), indent=1)
+        model_abl = load_finetuned(ABL_INFO)
+        SYSTEMS["ft_no_robust_data"] = lambda xs: generate([_build(x) for x in xs], model_abl)
+        evaluate_system("ft_no_robust_data")
+        del model_abl; gc.collect(); torch.cuda.empty_cache()
+    except Exception:
+        traceback.print_exc()
+        print("⚠️ ablation failed; continuing without it (main results are unaffected)")
+        RUN_ABLATION = False
+        for k in [k for k in RESULTS if k[0] == "ft_no_robust_data"]:
+            del RESULTS[k]
+        try: del model_abl
+        except NameError: pass
+        gc.collect(); torch.cuda.empty_cache()
 ''')
 
 md("## 10. Results tables, significance tests, charts")
@@ -1069,7 +1095,15 @@ def build_static_space(space_dir):
         links.insert(1, ["GGUF (CPU)", f"https://huggingface.co/{GGUF_REPO}"])
     data = {"fields": FIELDS, "systems": shown, "system_names": names, "metrics": metrics,
             "examples": examples, "links": links}
-    blob = json.dumps(data, ensure_ascii=False, default=str).replace("</", "<\\/")
+    def _clean(x):
+        if isinstance(x, float) and (x != x or x in (float("inf"), float("-inf"))):
+            return None
+        if isinstance(x, dict):
+            return {k: _clean(v) for k, v in x.items()}
+        if isinstance(x, list):
+            return [_clean(v) for v in x]
+        return x
+    blob = json.dumps(_clean(data), ensure_ascii=False, default=str).replace("</", "<\\/")
     open(f"{space_dir}/index.html", "w", encoding="utf-8").write(SPACE_STATIC_HTML.replace("__DATA__", blob))
     open(f"{space_dir}/README.md", "w", encoding="utf-8").write(
         "---\ntitle: Tiny Aya SMS to JSON - results explorer\nemoji: 🧾\ncolorFrom: indigo\ncolorTo: green\n"
@@ -1159,6 +1193,11 @@ ctx = {
     "GPU_HOURS": f"{ROI['self_hosted']['gpu_hours_per_month']:,.1f}", "TOK_S": f"{GEN_TOKENS_PER_SEC:.0f}",
     "TRAIN_COST": f"{ROI['self_hosted']['one_time_training_usd']:.2f}",
     "API_COST": ", ".join(f"{k} ${v['usd_per_1M_sms']:,.2f}" for k, v in ROI["api"].items()),
+    "GGUF_NOTE": ("An 8-bit GGUF version runs on CPU with llama.cpp, so SMS never need to leave the user's infrastructure, and a free Space lets anyone browse every prediction."
+                  if GGUF_PATH else "The adapter runs on a single small GPU, so SMS never need to leave the user's infrastructure, and a free Space lets anyone browse every prediction."),
+    "GGUF_LINK": (f" · [GGUF](https://huggingface.co/{GGUF_REPO})" if GGUF_PATH else ""),
+    "TRAIN_TOOL": ("AlignTune (SFT with the TRL backend on one free T4 GPU)" if FT_INFO.get("path") == "aligntune"
+                   else "TRL + PEFT (AlignTune could not run here; recorded in the logs)"),
     "MODEL_REPO": MODEL_REPO, "GGUF_REPO": GGUF_REPO, "DATA_REPO": DATA_REPO, "SPACE_REPO": SPACE_REPO,
     "BASE_MODEL": BASE_MODEL, "LORA_R": str(LORA_R), "LORA_ALPHA": str(LORA_ALPHA), "LR": str(LR), "EPOCHS": str(EPOCHS),
 }

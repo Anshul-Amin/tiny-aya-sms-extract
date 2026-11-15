@@ -3,7 +3,7 @@
 *Lexsi AI Safety & Alignment Hackathon · Track 1 (Fine-tuning & Data Curation) · Problem 5 (Structured output & extraction), also Problem 2 (replacing a closed-model API) and Problem 4 (multilingual & code-mixed)*
 
 **Model:** `{{BASE_MODEL}}` + LoRA · **Toolkits:** CuratorKIT → AlignTune → AuditKIT
-**Links:** [LoRA adapter](https://huggingface.co/{{MODEL_REPO}}) · [GGUF](https://huggingface.co/{{GGUF_REPO}}) · [Dataset, predictions & logs](https://huggingface.co/datasets/{{DATA_REPO}}) · [Results explorer (Space)](https://huggingface.co/spaces/{{SPACE_REPO}}) · [GitHub](https://github.com/Anshul-Amin/tiny-aya-sms-extract)
+**Links:** [LoRA adapter](https://huggingface.co/{{MODEL_REPO}}){{GGUF_LINK}} · [Dataset, predictions & logs](https://huggingface.co/datasets/{{DATA_REPO}}) · [Results explorer (Space)](https://huggingface.co/spaces/{{SPACE_REPO}}) · [GitHub](https://github.com/Anshul-Amin/tiny-aya-sms-extract)
 
 ---
 
@@ -29,7 +29,7 @@ For downstream finance apps, **a wrong value is worse than a missing one**: an i
 
 **Model: Tiny Aya Global (3.35B).**
 - **Language balance.** It is the Tiny Aya variant tuned for balanced performance across languages and regions. Our inputs mix English, Hindi and romanised Hindi in the same message, so a balanced variant is the safer default. *Tiny Aya Fire* (South-Asia specialised) is a natural follow-up comparison.
-- **Size fits the budget.** At 3.35B parameters, LoRA fine-tuning and batched inference both fit on one free 16 GB T4, and an 8-bit GGUF runs on a 2-vCPU CPU. Aya Expanse 8B/32B would be more capable, but they cannot be fine-tuned on free hardware or served cheaply on-premise, and cheap on-premise serving is the point of the ROI argument.
+- **Size fits the budget.** At 3.35B parameters, LoRA fine-tuning and batched inference both fit on one free 16 GB T4, and an 8-bit GGUF export can run on CPU. Aya Expanse 8B/32B would be more capable, but they cannot be fine-tuned on free hardware or served cheaply on-premise, and cheap on-premise serving is the point of the ROI argument.
 - **Small output space.** The output is short and structured (~80 tokens), so model size matters less than format discipline. Fine-tuning targets format discipline directly.
 
 **Data: synthetic, with exact labels.** Real bank SMS contain account numbers, balances and names, so they cannot be collected or published responsibly. Synthetic generation gives (a) **exact gold labels**, (b) **full control over edge cases**, and (c) a **publishable dataset**. The risk of synthetic data is overfitting to templates. We counter it with a template-level held-out split and a hand-written challenge set.
@@ -131,7 +131,7 @@ Most frequent remaining errors (fine-tuned, unseen + challenge): {{WRONG_FIELDS}
 
 {{ROI_TABLE}}
 
-Method: realistic volume ({{MONTHLY_SMS}} SMS/month) ÷ measured throughput ({{TOK_S}} generated tokens/s, batched greedy decoding on a T4) → GPU hours × hourly GPU price. API cost uses list prices and our measured average prompt/answer lengths (counted with Tiny Aya's tokenizer, an approximation). GPT-5-family models may also bill hidden reasoning tokens, so API figures are a **lower bound**. The fine-tuned model also runs on **CPU** as an 8-bit GGUF (llama.cpp), so on-device or on-prem extraction is possible and no SMS ever leaves the user's infrastructure. That is a privacy win for financial data.
+Method: realistic volume ({{MONTHLY_SMS}} SMS/month) ÷ measured throughput ({{TOK_S}} generated tokens/s, batched greedy decoding on a T4) → GPU hours × hourly GPU price. API cost uses list prices and our measured average prompt/answer lengths (counted with Tiny Aya's tokenizer, an approximation). GPT-5-family models may also bill hidden reasoning tokens, so API figures are a **lower bound**. The fine-tuned model can also be exported to an 8-bit GGUF for **CPU** inference (llama.cpp), so on-device or on-prem extraction is possible and no SMS ever leaves the user's infrastructure. That is a privacy win for financial data.
 
 **Licence note:** Tiny Aya is released under CC-BY-NC. A commercial deployment needs a licence from Cohere; the cost comparison is about compute, not licensing.
 
