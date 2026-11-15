@@ -61,6 +61,8 @@ class _Tok:
     eos_token = "<eos>"; pad_token = "<pad>"; padding_side = "left"
     def __call__(self, text, add_special_tokens=False, **kw):
         return {"input_ids": list(range(max(1, len(text) // 4)))}
+    def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False):
+        return "PREAMBLE " * 300 + "\n".join(m["content"] for m in messages)
 tok = _Tok()
 def to_prompt(messages):
     return "\n".join(m["content"] for m in messages)

@@ -65,7 +65,8 @@ N_TRAIN, N_DEV, N_TEST_ID, N_TEST_OOD = 1600, 120, 300, 300   # sized to fit one
 MAX_NEW_TOKENS = 160
 GEN_BATCH      = 32
 LORA_R, LORA_ALPHA, LORA_DROPOUT = 16, 32, 0.05
-LR, EPOCHS, TRAIN_BATCH, GRAD_ACCUM, MAX_SEQ_LEN = 2e-4, 1, 4, 4, 512
+LR, EPOCHS, TRAIN_BATCH, GRAD_ACCUM = 2e-4, 1, 2, 8   # effective batch 16
+MAX_SEQ_LEN = None   # None = measured from the data so that no answer is ever truncated (see finetune)
 
 # ROI assumptions (edit to your situation; sources in the article)
 GPU_USD_PER_HOUR = 0.35            # typical on-demand price of a cloud T4
@@ -596,8 +597,21 @@ def run_worker(cfg, tag):
     except Exception as e:
         return {"ok": False, "path": cfg["mode"], "error": f"worker crashed (exit {proc.returncode}): {e}"}
 
+def needed_seq_len(rows):
+    """Token length of each full training example (Aya's chat template adds a ~400-token default preamble).
+    The trainer truncates from the right, so a too-small max length silently cuts off the JSON answer."""
+    lens = []
+    for r in rows:
+        msgs = build_messages(r["sms"]) + [{"role": "assistant", "content": gold_to_str(r["gold"])}]
+        lens.append(len(tok(tok.apply_chat_template(msgs, tokenize=False), add_special_tokens=False)["input_ids"]) + 2)
+    lens.sort()
+    print(f"training example length in tokens: median {lens[len(lens)//2]}, p95 {lens[int(.95*len(lens))]}, max {lens[-1]}")
+    return int(math.ceil((lens[-1] + 16) / 64) * 64)
+
 def finetune(rows, tag):
     out_dir = f"{WORK}/models/{tag}"
+    seq_len = MAX_SEQ_LEN or needed_seq_len(rows)
+    print("max_seq_length for training:", seq_len)
     free_gpu()
     data = write_train_data(rows, f"{out_dir}_data")
     t0 = time.time()
@@ -605,7 +619,7 @@ def finetune(rows, tag):
     if OK_ALIGN:
         lora = dict(use_peft=True, lora_r=LORA_R, lora_alpha=LORA_ALPHA, lora_dropout=LORA_DROPOUT)
         common = dict(model_name=BASE_MODEL, backend="trl", num_epochs=EPOCHS, max_steps=-1,
-                      batch_size=TRAIN_BATCH, learning_rate=LR, max_seq_length=MAX_SEQ_LEN,
+                      batch_size=TRAIN_BATCH, learning_rate=LR, max_seq_length=seq_len,
                       gradient_accumulation_steps=GRAD_ACCUM, gradient_checkpointing=True,
                       fp16=not BF16, bf16=BF16, output_dir=out_dir, save_interval=100000, **lora)
         for label, extra in [("lora_fp16", dict(precision="float16" if not BF16 else "bfloat16")),
@@ -621,7 +635,7 @@ def finetune(rows, tag):
         print("⚠️ AlignTune could not train here -> TRL + PEFT LoRA fallback with identical settings (recorded)")
         res = run_worker(dict(mode="trl", out_dir=f"{out_dir}/trl", data=data, base_model=BASE_MODEL,
                               trl=dict(epochs=EPOCHS, batch=TRAIN_BATCH, grad_accum=GRAD_ACCUM, lr=LR,
-                                       max_len=MAX_SEQ_LEN, lora_r=LORA_R, lora_alpha=LORA_ALPHA,
+                                       max_len=seq_len, lora_r=LORA_R, lora_alpha=LORA_ALPHA,
                                        lora_dropout=LORA_DROPOUT, seed=SEED, bf16=BF16)), tag)
         attempts.append({"attempt": "trl_fallback", **{k: v for k, v in res.items() if k != "log_history"}})
         if not res.get("ok"):
@@ -673,6 +687,14 @@ for fmt, builder in {"chat": lambda x: to_prompt(build_messages(x)), "alpaca": a
     fmt_scores[fmt] = S.aggregate([S.score_example(o, r["gold"]) for o, r in zip(outs, dev)])["exact_match"]
 FT_FORMAT = max(fmt_scores, key=fmt_scores.get)
 print("dev exact match by prompt format:", fmt_scores, "-> using", FT_FORMAT)
+# sanity check: the model must reproduce its own training answers; if not, training or loading is broken
+_chk = train_rows[:16]
+_outs = generate([to_prompt(build_messages(r["sms"])) for r in _chk], model)
+_em = S.aggregate([S.score_example(o, r["gold"]) for o, r in zip(_outs, _chk)])["exact_match"]
+print(f"sanity check on 16 training examples: exact match {_em:.2f}")
+print("example output:", repr(_outs[0][:300]))
+if _em < 0.5:
+    print("⚠️ the fine-tuned model does not reproduce its training answers: check max_seq_length / adapter loading")
 _build = (lambda x: to_prompt(build_messages(x))) if FT_FORMAT == "chat" else alpaca_prompt
 SYSTEMS["fine_tuned"] = lambda xs: generate([_build(x) for x in xs], model)
 evaluate_system("fine_tuned")
