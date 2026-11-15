@@ -21,13 +21,14 @@
 | AlignTune errors or runs out of memory | Falls back to TRL + PEFT with identical settings; the report records `trl_fallback`. Mention it honestly. |
 | AuditKIT `evaluate` errors | Metrics are still computed; `audit.auditkit_error` is saved in `metrics.json`. |
 | Empty model outputs in fp16 | The notebook reloads in float32 automatically. |
-| GGUF conversion fails | Set `SPACE_ADD_TOKEN = True` and re-run the Space cell; the demo uses the slow transformers fallback. |
+| GGUF conversion fails | The adapter still works with transformers; run `space/app.py` locally for a live demo. |
+| Gradio Space returns 402 | HF requires PRO for Gradio Spaces; the notebook publishes the free static results explorer instead. |
 | Kaggle session dies mid-run | Re-run all. Training is ~20 min; each eval pass ~5–10 min. |
 
 ## C. Check what the notebook created on Hugging Face
 - [ ] Model: `<you>/tiny-aya-sms-extract-lora` (+ `-gguf`, + `-lora-ablation-clean`)
 - [ ] Dataset: `<you>/tiny-aya-sms-extract-data` (splits, predictions, metrics, figures, CuratorKIT run)
-- [ ] Space: `<you>/tiny-aya-sms-extract-demo`. Open it, click an example and confirm it answers (first load takes 1–2 min).
+- [ ] Space: `<you>/tiny-aya-sms-extract-demo`. Open it and check the metrics table and the prediction browser load.
 - [ ] Two collections: *"Tiny Aya SMS extraction: models"* and *"…: datasets"*. Make sure everything is **public**.
 - [ ] **Logs are on HF** (the rules ask for models, adapters, logs and datasets): the model repo has `logs/` (training loss history, train info, loss curve); the dataset repo has `results/` (AuditKIT run records, metrics, every prediction, CuratorKIT report).
 - [ ] Kaggle → *File → Download notebook* (the executed one, with outputs) → add it to your GitHub repo as `notebooks/executed_run.ipynb`. It is your full run log.

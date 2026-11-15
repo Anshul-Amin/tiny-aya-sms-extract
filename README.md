@@ -19,7 +19,7 @@ smsgen ──► CuratorKIT ──► AuditKIT (regex · zero-shot · few-shot) 
 4. **Hard negatives + edge cases:** OTPs with amounts, credit-limit distractors, foreign currency, truncation, Devanagari digits, `Rs.450debited`, ALL CAPS.
 5. **Ablation:** the same fine-tune without the robustness data.
 6. **Fair baselines:** a careful regex parser, zero-shot and few-shot prompting of the same model.
-7. **CPU deployment:** an 8-bit GGUF runs the demo on a free 2-vCPU Space.
+7. **CPU deployment:** an 8-bit GGUF runs on CPU with llama.cpp; a free static Space lets anyone browse every test prediction against gold and the baselines.
 8. **ROI the way the rules ask:** 10M SMS/month, measured SMS/s and tokens/s, GPU hours × $/hour, vs per-token API billing.
 9. **Responsible data:** fully synthetic; bank names are fictional; no links or phone numbers.
 
@@ -31,7 +31,8 @@ smsgen ──► CuratorKIT ──► AuditKIT (regex · zero-shot · few-shot) 
 | `src/scoring.py` | JSON extraction, schema validation, field metrics, hallucination/omission, McNemar, bootstrap |
 | `src/regex_baseline.py` | Rule-based baseline |
 | `data/challenge_set.py` → `.jsonl` | Hand-written challenge set |
-| `space/` | Gradio demo (GGUF on CPU, transformers fallback) |
+| `space/` | Gradio live demo (GGUF on CPU, transformers fallback); run locally, or on a Space with HF PRO |
+| `space_static/` | Static results explorer published as the free HF Space |
 | `docs/ARTICLE_TEMPLATE.md`, `docs/ABSTRACT_TEMPLATE.md` | Filled in automatically by the notebook with real numbers |
 | `tests/test_core.py` | Model-free tests (labels grounded in text, no leakage, scoring) |
 | `tests/dry_run.py` | Runs the entire notebook on CPU with a fake model (plumbing test) |
@@ -42,7 +43,7 @@ smsgen ──► CuratorKIT ──► AuditKIT (regex · zero-shot · few-shot) 
 2. Kaggle → New Notebook → *File → Import Notebook* → `notebooks/sms_extraction_pipeline.ipynb`.
    Settings: **Accelerator GPU T4 x1**, **Internet on**. Add-ons → Secrets → `HF_TOKEN`.
 3. Set `QUICK_MODE = True`, *Run all* (≈10 min smoke test). Then `QUICK_MODE = False`, *Run all* (≈1.5–2.5 h).
-4. Outputs: `/kaggle/working/` → `results/` (metrics, predictions, AuditKIT records, training logs, ROI), `figures/`, `ARTICLE.md`, `ABSTRACT.md`, plus HF repos (adapter + `logs/`, GGUF, dataset), two collections and the demo Space.
+4. Outputs: `/kaggle/working/` → `results/` (metrics, predictions, AuditKIT records, training logs, ROI), `figures/`, `ARTICLE.md`, `ABSTRACT.md`, plus HF repos (adapter + `logs/`, GGUF, dataset), two collections and the results-explorer Space.
 
 Local checks (no GPU): `python tests/test_core.py` and `python tests/dry_run.py`.
 

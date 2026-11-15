@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tiny Aya SMS → JSON: results explorer</title>
+<style>
+  :root { --bg:#fafaf7; --fg:#1d1d1b; --muted:#6b6b66; --line:#e3e2dc; --ok:#1f7a4d; --bad:#b3261e; --chip:#efeee8; --accent:#3b5bdb; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#161615; --fg:#ecebe6; --muted:#9a9993; --line:#2e2e2b; --ok:#5cc28d; --bad:#ff8a80; --chip:#252523; --accent:#8ea2ff; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 28px 20px 60px; }
+  h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 18px; margin: 34px 0 10px; }
+  p.lead { color: var(--muted); margin: 0 0 14px; max-width: 760px; }
+  a { color: var(--accent); }
+  .links a { margin-right: 14px; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  th { font-weight: 600; color: var(--muted); font-size: 13px; }
+  td.num, th.num { text-align: right; }
+  tr.ft td { font-weight: 600; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 10px 0 14px; }
+  select, input { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+  input[type=search] { flex: 1; min-width: 200px; }
+  .count { color: var(--muted); font-size: 13px; }
+  .card { border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
+  .sms { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13.5px; white-space: pre-wrap; margin: 4px 0 10px; }
+  .meta { color: var(--muted); font-size: 12.5px; }
+  .chip { display: inline-block; background: var(--chip); border-radius: 999px; padding: 1px 9px; font-size: 12px; margin-right: 4px; }
+  .grid { display: grid; grid-template-columns: 130px repeat(var(--n), minmax(0, 1fr)); font-size: 13px; }
+  .grid div { padding: 4px 6px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+  .grid .h { font-weight: 600; color: var(--muted); }
+  .grid .k { color: var(--muted); }
+  .bad { color: var(--bad); font-weight: 600; }
+  .ok { color: var(--ok); }
+  .em { font-size: 12px; margin-left: 6px; }
+  .note { color: var(--muted); font-size: 13px; max-width: 800px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Tiny Aya SMS → JSON</h1>
+  <p class="lead">Indian bank and UPI SMS (English, Hindi, Hinglish) turned into an 11-field JSON record by a LoRA fine-tune of <code>CohereLabs/tiny-aya-global</code>.
+  This page lets you browse every test prediction: the gold label next to the regex parser, few-shot prompting and the fine-tuned model. Field values in red are wrong.</p>
+  <p class="links" id="links"></p>
+
+  <h2>Headline metrics</h2>
+  <div class="controls"><label>Split <select id="msplit"></select></label></div>
+  <table id="mtable"></table>
+  <p class="note">Exact match = all 11 fields right. Hallucination = a field filled with a value that is not in the SMS. Non-txn F1 = detecting messages that mention money but are not transactions (OTPs, offers, bill reminders…).</p>
+
+  <h2>Browse predictions</h2>
+  <div class="controls">
+    <label>Split <select id="split"></select></label>
+    <label>Language <select id="lang"><option value="">all</option></select></label>
+    <label>Show <select id="filter">
+      <option value="">all messages</option>
+      <option value="ft_wrong">fine-tuned wrong</option>
+      <option value="ft_right_fs_wrong">fine-tuned right, few-shot wrong</option>
+      <option value="nontxn">non-transactions only</option>
+    </select></label>
+    <input type="search" id="q" placeholder="search the SMS text…">
+    <span class="count" id="count"></span>
+  </div>
+  <div id="list"></div>
+  <p class="note" id="more"></p>
+  <p class="note">This is a static page: it shows recorded predictions and runs no model. To run the model yourself, use the GGUF with llama.cpp on CPU, or the Gradio app in the GitHub repo's <code>space/</code> folder.</p>
+</main>
+<script id="data" type="application/json">__DATA__</script>
+<script>
+const D = JSON.parse(document.getElementById('data').textContent);
+const FIELDS = D.fields, SYS = D.systems, NAMES = D.system_names;
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const pct = v => v == null ? '–' : (100 * v).toFixed(1) + '%';
+
+$('links').innerHTML = D.links.map(([t, u]) => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(t)}</a>`).join('');
+
+const msplits = Object.keys(D.metrics);
+$('msplit').innerHTML = msplits.map(s => `<option>${esc(s)}</option>`).join('');
+$('msplit').value = msplits.includes('challenge') ? 'challenge' : msplits[0];
+function drawMetrics() {
+  const sp = $('msplit').value, rows = D.metrics[sp] || {};
+  const cols = [['exact_match','Exact match'],['field_acc_txn','Field acc.'],['hallucination_rate','Hallucination ↓'],['nontxn_f1','Non-txn F1'],['schema_valid','Valid JSON']];
+  let h = '<tr><th>System</th>' + cols.map(c => `<th class="num">${c[1]}</th>`).join('') + '</tr>';
+  for (const s of Object.keys(rows)) {
+    h += `<tr class="${s === 'fine_tuned' ? 'ft' : ''}"><td>${esc(NAMES[s] || s)}</td>` + cols.map(c => `<td class="num">${pct(rows[s][c[0]])}</td>`).join('') + '</tr>';
+  }
+  $('mtable').innerHTML = h;
+}
+$('msplit').onchange = drawMetrics; drawMetrics();
+
+const splitsAvail = [...new Set(D.examples.map(e => e.split))];
+$('split').innerHTML = splitsAvail.map(s => `<option>${esc(s)}</option>`).join('');
+$('split').value = splitsAvail.includes('challenge') ? 'challenge' : splitsAvail[0];
+const langs = [...new Set(D.examples.map(e => e.lang).filter(Boolean))];
+$('lang').innerHTML += langs.map(l => `<option>${esc(l)}</option>`).join('');
+
+
+function card(e) {
+  const n = SYS.length;
+  let g = `<div class="grid" style="--n:${n + 1}"><div class="h">field</div><div class="h">gold</div>` +
+    SYS.map(s => `<div class="h">${esc(NAMES[s] || s)}<span class="em ${e.em[s] ? 'ok' : 'bad'}">${e.em[s] ? '✓ exact' : '✗'}</span></div>`).join('');
+  for (const f of FIELDS) {
+    g += `<div class="k">${esc(f)}</div><div>${esc(e.gold[f] ?? 'null')}</div>`;
+    for (const s of SYS) {
+      const p = e.pred[s];
+      if (p == null) { g += `<div class="bad">(no valid JSON)</div>`; continue; }
+      const v = p[f];
+      g += `<div class="${(e.bad[s] || []).includes(f) ? 'bad' : ''}">${esc(v ?? 'null')}</div>`;
+    }
+  }
+  g += '</div>';
+  const tags = (e.tags || []).map(t => `<span class="chip">${esc(t)}</span>`).join('');
+  return `<div class="card"><div class="meta">${esc(e.id)} · ${esc(e.lang || '')} ${tags}</div><div class="sms">${esc(e.sms)}</div>${g}</div>`;
+}
+
+function draw() {
+  const sp = $('split').value, lg = $('lang').value, f = $('filter').value, q = $('q').value.trim().toLowerCase();
+  let xs = D.examples.filter(e => e.split === sp && (!lg || e.lang === lg) && (!q || e.sms.toLowerCase().includes(q)));
+  if (f === 'ft_wrong') xs = xs.filter(e => !e.em.fine_tuned);
+  if (f === 'ft_right_fs_wrong') xs = xs.filter(e => e.em.fine_tuned && !e.em.few_shot);
+  if (f === 'nontxn') xs = xs.filter(e => e.gold.is_transaction === false);
+  $('count').textContent = xs.length + ' messages';
+  $('list').innerHTML = xs.slice(0, 60).map(card).join('');
+  $('more').textContent = xs.length > 60 ? `Showing the first 60 of ${xs.length}; narrow the filters to see others.` : '';
+}
+for (const id of ['split', 'lang', 'filter']) $(id).onchange = draw;
+$('q').oninput = draw;
+draw();
+</script>
+</body>
+</html>

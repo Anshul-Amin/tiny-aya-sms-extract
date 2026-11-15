@@ -885,6 +885,7 @@ MODEL_REPO = f"{HF_USERNAME}/{PROJECT}-lora"
 GGUF_REPO  = f"{HF_USERNAME}/{PROJECT}-gguf"
 DATA_REPO  = f"{HF_USERNAME}/{PROJECT}-data"
 SPACE_REPO = f"{HF_USERNAME}/{PROJECT}-demo"
+GITHUB_URL = "https://github.com/Anshul-Amin/tiny-aya-sms-extract"
 ABL_REPO   = f"{HF_USERNAME}/{PROJECT}-lora-ablation-clean"
 
 def headline(split, s="fine_tuned"):
@@ -988,7 +989,9 @@ if MAKE_GGUF:
         del m, base; gc.collect()
         if not os.path.isdir(f"{WORK}/llama.cpp"):
             subprocess.run(["git", "clone", "--depth", "1", "https://github.com/ggml-org/llama.cpp", f"{WORK}/llama.cpp"], check=True)
-        pip("-r", f"{WORK}/llama.cpp/requirements/requirements-convert_hf_to_gguf.txt")
+        # Do NOT pip-install llama.cpp's requirements file: it pins an older transformers that cannot read
+        # Tiny Aya's tokenizer. The converter uses its bundled gguf-py; it only needs these extras.
+        pip("sentencepiece", "protobuf")
         GGUF_PATH = f"{WORK}/models/{PROJECT}-q8_0.gguf"
         r = subprocess.run([sys.executable, f"{WORK}/llama.cpp/convert_hf_to_gguf.py", merged_dir,
                             "--outfile", GGUF_PATH, "--outtype", "q8_0"], capture_output=True, text=True)
@@ -1007,45 +1010,101 @@ if MAKE_GGUF:
 ''')
 
 code(r'''
-# ---- demo Space (Gradio, CPU) + collections ----
-SPACE_FILES_NOTE = "The Space files (app.py, requirements.txt, README.md) are in the repo's space/ folder."
+# ---- public demo Space + collections ----
+# Hugging Face now requires a PRO plan for Gradio/Docker Spaces on free CPU (HTTP 402), while static Spaces are free
+# for everyone. So by default we publish a static results explorer (every test prediction, gold vs systems).
+# The live Gradio app is in the GitHub repo's space/ folder; set SPACE_SDK = "gradio" if you have PRO.
+SPACE_SDK = globals().get("SPACE_SDK", "static")
+SPACE_URL = f"https://huggingface.co/spaces/{SPACE_REPO}"
+SPACE_OK = False
+
+def build_static_space(space_dir):
+    shown = [s for s in ["regex", "few_shot", "fine_tuned"] if any(k[0] == s for k in RESULTS)]
+    names = {"regex": "Regex parser", "zero_shot": "Zero-shot", "few_shot": "Few-shot (same model)",
+             "fine_tuned": "Fine-tuned (ours)", "ft_no_robust_data": "Ablation: clean data only"}
+    metrics = {}
+    for (s, sp), v in RESULTS.items():
+        metrics.setdefault(sp, {})[s] = {k: v["metrics"].get(k) for k in
+            ["exact_match", "field_acc_txn", "hallucination_rate", "nontxn_f1", "schema_valid"]}
+    order = ["regex", "zero_shot", "few_shot", "ft_no_robust_data", "fine_tuned"]
+    metrics = {sp: {s: d[s] for s in order if s in d} for sp, d in metrics.items()}
+    examples = []
+    for sp in [x for x in ["test_ood", "challenge"] if (shown[-1], x) in RESULTS]:
+        for i, r in enumerate(splits[sp]):
+            pred, em, bad = {}, {}, {}
+            for s in shown:
+                out = RESULTS[(s, sp)]["outputs"][i]
+                obj = out if isinstance(out, dict) else S.extract_json(str(out))
+                pred[s] = obj
+                em[s] = bool(RESULTS[(s, sp)]["scored"][i]["exact_match"])
+                bad[s] = [f for f in FIELDS if obj is None or not S.field_equal(f, obj.get(f), r["gold"].get(f))]
+            examples.append({"split": sp, "id": r["id"], "lang": r.get("lang"), "tags": r.get("tags", []),
+                             "sms": r["sms"], "gold": r["gold"], "pred": pred, "em": em, "bad": bad})
+    links = [["LoRA adapter", f"https://huggingface.co/{MODEL_REPO}"],
+             ["Dataset, predictions & logs", f"https://huggingface.co/datasets/{DATA_REPO}"],
+             ["GitHub", GITHUB_URL]]
+    if GGUF_PATH:
+        links.insert(1, ["GGUF (CPU)", f"https://huggingface.co/{GGUF_REPO}"])
+    data = {"fields": FIELDS, "systems": shown, "system_names": names, "metrics": metrics,
+            "examples": examples, "links": links}
+    blob = json.dumps(data, ensure_ascii=False, default=str).replace("</", "<\\/")
+    open(f"{space_dir}/index.html", "w", encoding="utf-8").write(SPACE_STATIC_HTML.replace("__DATA__", blob))
+    open(f"{space_dir}/README.md", "w", encoding="utf-8").write(
+        "---\ntitle: Tiny Aya SMS to JSON - results explorer\nemoji: 🧾\ncolorFrom: indigo\ncolorTo: green\n"
+        "sdk: static\npinned: false\nlicense: mit\n---\n\nBrowse every test prediction of the Tiny Aya SMS-extraction "
+        f"fine-tune next to the gold labels and baselines. Model: [{MODEL_REPO}](https://huggingface.co/{MODEL_REPO}).\n")
+    print(f"static Space: {len(examples)} examples, {os.path.getsize(space_dir + '/index.html') / 1e6:.2f} MB")
+
 if PUSH_TO_HUB:
-    try:
-        space_dir = f"{WORK}/space"
-        os.makedirs(space_dir, exist_ok=True)
-        for f in ["smsgen.py", "scoring.py", "regex_baseline.py"]:
-            shutil.copy(f"{WORK}/src/{f}", space_dir)
-        open(f"{space_dir}/app.py", "w").write(SPACE_APP)
-        open(f"{space_dir}/requirements.txt", "w").write(SPACE_REQS)
-        open(f"{space_dir}/README.md", "w").write(SPACE_README.replace("__GGUF_REPO__", GGUF_REPO).replace("__MODEL_REPO__", MODEL_REPO).replace("__DATA_REPO__", DATA_REPO))
-        api.create_repo(SPACE_REPO, repo_type="space", space_sdk="gradio", exist_ok=True)
-        for k, v in {"GGUF_REPO": GGUF_REPO, "GGUF_FILE": os.path.basename(GGUF_PATH) if GGUF_PATH else "",
-                     "LORA_REPO": MODEL_REPO, "BASE_MODEL": BASE_MODEL}.items():
-            try: api.add_space_variable(SPACE_REPO, k, v)
-            except Exception as e: print("space variable", k, e)
-        if token and SPACE_ADD_TOKEN:   # only needed for the slow transformers fallback (gated base model)
-            try: api.add_space_secret(SPACE_REPO, "HF_TOKEN", token)
-            except Exception as e: print("space secret", e)
-        api.upload_folder(folder_path=space_dir, repo_id=SPACE_REPO, repo_type="space")
-        print("Space:", f"https://huggingface.co/spaces/{SPACE_REPO}")
-    except Exception:
-        traceback.print_exc()
+    space_dir = f"{WORK}/space"
+    os.makedirs(space_dir, exist_ok=True)
+    if SPACE_SDK == "gradio":
+        try:
+            for f in ["smsgen.py", "scoring.py", "regex_baseline.py"]:
+                shutil.copy(f"{WORK}/src/{f}", space_dir)
+            open(f"{space_dir}/app.py", "w").write(SPACE_APP)
+            open(f"{space_dir}/requirements.txt", "w").write(SPACE_REQS)
+            open(f"{space_dir}/README.md", "w").write(SPACE_README.replace("__GGUF_REPO__", GGUF_REPO).replace("__MODEL_REPO__", MODEL_REPO).replace("__DATA_REPO__", DATA_REPO))
+            api.create_repo(SPACE_REPO, repo_type="space", space_sdk="gradio", exist_ok=True)
+            for k, v in {"GGUF_REPO": GGUF_REPO, "GGUF_FILE": os.path.basename(GGUF_PATH) if GGUF_PATH else "",
+                         "LORA_REPO": MODEL_REPO, "BASE_MODEL": BASE_MODEL}.items():
+                try: api.add_space_variable(SPACE_REPO, k, v)
+                except Exception as e: print("space variable", k, e)
+            if token and SPACE_ADD_TOKEN:   # only needed for the slow transformers fallback (gated base model)
+                try: api.add_space_secret(SPACE_REPO, "HF_TOKEN", token)
+                except Exception as e: print("space secret", e)
+            api.upload_folder(folder_path=space_dir, repo_id=SPACE_REPO, repo_type="space")
+            SPACE_OK = True
+        except Exception as e:
+            print("⚠️ Gradio Space failed (", str(e)[:200], ") -> publishing the static explorer instead")
+            shutil.rmtree(space_dir, ignore_errors=True); os.makedirs(space_dir, exist_ok=True)
+    if not SPACE_OK:
+        try:
+            build_static_space(space_dir)
+            api.create_repo(SPACE_REPO, repo_type="space", space_sdk="static", exist_ok=True)
+            api.upload_folder(folder_path=space_dir, repo_id=SPACE_REPO, repo_type="space",
+                              allow_patterns=["index.html", "README.md"])
+            SPACE_OK = True
+        except Exception:
+            traceback.print_exc()
+    print("Space:", SPACE_URL if SPACE_OK else "not published")
 
     COLLECTIONS = {}
-    try:
-        cm = api.create_collection(title="Tiny Aya SMS extraction: models", namespace=HF_USERNAME,
-                                   description="Lexsi hackathon T1-P5: LoRA + GGUF models", exists_ok=True)
-        for rid in [MODEL_REPO] + ([GGUF_REPO] if GGUF_PATH else []) + ([ABL_REPO] if RUN_ABLATION else []):
-            api.add_collection_item(cm.slug, item_id=rid, item_type="model", exists_ok=True)
-        api.add_collection_item(cm.slug, item_id=SPACE_REPO, item_type="space", exists_ok=True)
-        cd = api.create_collection(title="Tiny Aya SMS extraction: datasets", namespace=HF_USERNAME,
-                                   description="Lexsi hackathon T1-P5: data, predictions, metrics, logs", exists_ok=True)
-        api.add_collection_item(cd.slug, item_id=DATA_REPO, item_type="dataset", exists_ok=True)
-        COLLECTIONS = {"models": f"https://huggingface.co/collections/{cm.slug}",
-                       "datasets": f"https://huggingface.co/collections/{cd.slug}"}
-        print(COLLECTIONS)
-    except Exception:
-        traceback.print_exc()
+    def _coll(title, desc, items):
+        try:
+            c = api.create_collection(title=title, namespace=HF_USERNAME, description=desc, exists_ok=True)
+        except Exception:
+            traceback.print_exc(); return None
+        for rid, kind in items:
+            try: api.add_collection_item(c.slug, item_id=rid, item_type=kind, exists_ok=True)
+            except Exception as e: print("collection item", rid, str(e)[:150])
+        return f"https://huggingface.co/collections/{c.slug}"
+    model_items = [(MODEL_REPO, "model")] + ([(GGUF_REPO, "model")] if GGUF_PATH else []) \
+                  + ([(ABL_REPO, "model")] if RUN_ABLATION else []) + ([(SPACE_REPO, "space")] if SPACE_OK else [])
+    COLLECTIONS["models"] = _coll("Tiny Aya SMS extraction: models", "Lexsi hackathon T1-P5: LoRA + GGUF models + demo", model_items)
+    COLLECTIONS["datasets"] = _coll("Tiny Aya SMS extraction: datasets", "Lexsi hackathon T1-P5: data, predictions, metrics, logs",
+                                    [(DATA_REPO, "dataset")])
+    print(COLLECTIONS)
 ''')
 
 md("## 14. Render the Hugging Face article and the abstract from the real numbers\nWrites `ARTICLE.md` and `ABSTRACT.md` into the working directory. Review, add your name, then paste into a Hugging Face article (huggingface.co/new-blog) and the submission form.")
@@ -1099,6 +1158,7 @@ TEMPLATES_CELL = (
     f"SPACE_APP = {read('space/app.py')!r}\n"
     f"SPACE_REQS = {read('space/requirements.txt')!r}\n"
     f"SPACE_README = {read('space/README.md')!r}\n"
+    f"SPACE_STATIC_HTML = {read('space_static/index.html')!r}\n"
     "print('templates loaded')"
 )
 # insert right after the source-files cell (index of the challenge cell + 1)

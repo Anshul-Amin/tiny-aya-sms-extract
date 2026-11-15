@@ -3,7 +3,7 @@
 *Lexsi AI Safety & Alignment Hackathon · Track 1 (Fine-tuning & Data Curation) · Problem 5 (Structured output & extraction), also Problem 2 (replacing a closed-model API) and Problem 4 (multilingual & code-mixed)*
 
 **Model:** `{{BASE_MODEL}}` + LoRA · **Toolkits:** CuratorKIT → AlignTune → AuditKIT
-**Links:** [LoRA adapter](https://huggingface.co/{{MODEL_REPO}}) · [GGUF](https://huggingface.co/{{GGUF_REPO}}) · [Dataset, predictions & logs](https://huggingface.co/datasets/{{DATA_REPO}}) · [Demo](https://huggingface.co/spaces/{{SPACE_REPO}}) · GitHub: `<add your repo link>`
+**Links:** [LoRA adapter](https://huggingface.co/{{MODEL_REPO}}) · [GGUF](https://huggingface.co/{{GGUF_REPO}}) · [Dataset, predictions & logs](https://huggingface.co/datasets/{{DATA_REPO}}) · [Results explorer (Space)](https://huggingface.co/spaces/{{SPACE_REPO}}) · [GitHub](https://github.com/Anshul-Amin/tiny-aya-sms-extract)
 
 ---
 
@@ -131,7 +131,7 @@ Most frequent remaining errors (fine-tuned, unseen + challenge): {{WRONG_FIELDS}
 
 {{ROI_TABLE}}
 
-Method: realistic volume ({{MONTHLY_SMS}} SMS/month) ÷ measured throughput ({{TOK_S}} generated tokens/s, batched greedy decoding on a T4) → GPU hours × hourly GPU price. API cost uses list prices and our measured average prompt/answer lengths (counted with Tiny Aya's tokenizer, an approximation). GPT-5-family models may also bill hidden reasoning tokens, so API figures are a **lower bound**. The fine-tuned model also runs on **CPU** as an 8-bit GGUF (the demo Space uses 2 free vCPUs), so on-device or on-prem extraction is possible and no SMS ever leaves the user's infrastructure. That is a privacy win for financial data.
+Method: realistic volume ({{MONTHLY_SMS}} SMS/month) ÷ measured throughput ({{TOK_S}} generated tokens/s, batched greedy decoding on a T4) → GPU hours × hourly GPU price. API cost uses list prices and our measured average prompt/answer lengths (counted with Tiny Aya's tokenizer, an approximation). GPT-5-family models may also bill hidden reasoning tokens, so API figures are a **lower bound**. The fine-tuned model also runs on **CPU** as an 8-bit GGUF (llama.cpp), so on-device or on-prem extraction is possible and no SMS ever leaves the user's infrastructure. That is a privacy win for financial data.
 
 **Licence note:** Tiny Aya is released under CC-BY-NC. A commercial deployment needs a licence from Cohere; the cost comparison is about compute, not licensing.
 
