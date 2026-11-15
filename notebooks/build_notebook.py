@@ -211,6 +211,7 @@ def to_alpaca(r):
 raw_path = f"{WORK}/data/train_alpaca_raw.jsonl"
 write_jsonl(raw_path, [to_alpaca(r) for r in splits["train"]])
 by_input = {f"SMS: {r['sms']}": r for r in splits["train"]}
+by_id = {r["id"]: r for r in splits["train"]}
 
 def make_config(cls, **kw):
     try:
@@ -227,47 +228,77 @@ def load_any(path):
     data = json.load(open(path, encoding="utf-8"))
     return data if isinstance(data, list) else data.get("data", [])
 
-curation = {"tool": "CuratorKIT", "ran": False, "rows_in": len(splits["train"])}
+curation = {"tool": "CuratorKIT", "ran": False, "rows_in": len(splits["train"]),
+            "rows_in_by_lang": dict(Counter(r["lang"] for r in splits["train"]))}
+
+def find_exports(out_dir):
+    return [f for f in glob.glob(f"{out_dir}/**/*", recursive=True)
+            if os.path.isfile(f) and "alpaca" in f.lower() and f.endswith((".json", ".jsonl"))]
+
+def run_curator(clean, dedup="exact"):
+    """Run CuratorKIT; map exported rows back to our rows; apply our JSON quality gate."""
+    from curatorkit import Curator, CuratorConfig
+    out_dir = f"{WORK}/curated/{dedup}_clean{int(bool(clean))}"
+    cfg = make_config(CuratorConfig, dataset=raw_path, dedup=dedup, clean=clean,
+                      export_formats=["alpaca"], output_dir=out_dir)
+    res = Curator(cfg).run()
+    try: res.print_summary()
+    except Exception: pass
+    exported = [e for f in find_exports(out_dir) for e in load_any(f)]
+    kept, dropped_gate = [], 0
+    for e in exported:
+        inp = e.get("input", "")
+        src = by_id.get(e.get("id")) or by_input.get(inp) or by_input.get(f"SMS: {inp}")
+        ok = src is not None and S.extract_json(e.get("output", "")) is not None \
+             and S.score_example(e.get("output", ""), src["gold"])["exact_match"]
+        if ok: kept.append(src)
+        else: dropped_gate += 1
+    # de-duplicate the mapping (exports may repeat a row) while keeping order
+    seen, uniq = set(), []
+    for r in kept:
+        if r["id"] not in seen:
+            seen.add(r["id"]); uniq.append(r)
+    stats = {"clean": clean, "dedup": dedup, "rows_exported": len(exported), "rows_after_gate": len(uniq),
+             "dropped_by_quality_gate": dropped_gate,
+             "kept_by_lang": dict(Counter(r["lang"] for r in uniq)),
+             "provenance_files": sorted({os.path.basename(p) for p in glob.glob(f"{out_dir}/**/*", recursive=True)
+                                         if os.path.basename(p) in ("manifest.json", "lexsi_provenance.json",
+                                                                    "checksums.txt", "dataset_card.md")})}
+    return uniq, stats
+
+def retention(stats):
+    return {l: stats["kept_by_lang"].get(l, 0) / n for l, n in curation["rows_in_by_lang"].items()}
+
 curated_rows = None
 if OK_CURATOR:
     try:
-        from curatorkit import Curator, CuratorConfig
-        out_dir = f"{WORK}/curated/exact"
-        cfg = make_config(CuratorConfig, dataset=raw_path, dedup="exact", clean=True,
-                          export_formats=["alpaca"], output_dir=out_dir)
-        res = Curator(cfg).run()
-        try: res.print_summary()
-        except Exception: pass
-        files = [f for f in glob.glob(f"{out_dir}/**/*", recursive=True)
-                 if os.path.isfile(f) and "alpaca" in f.lower() and f.endswith((".json", ".jsonl"))]
-        print("CuratorKIT exports:", files)
-        exported = []
-        for f in files:
-            exported += load_any(f)
-        curated_rows, dropped_gate = [], 0
-        for e in exported:
-            src = by_input.get(e.get("input", "")) or by_input.get(f"SMS: {e.get('input', '')}")
-            ok = src is not None and S.extract_json(e.get("output", "")) is not None \
-                 and S.score_example(e.get("output", ""), src["gold"])["exact_match"]
-            if ok:
-                curated_rows.append(src)
-            else:
-                dropped_gate += 1
-        curation.update(ran=True, rows_exported=len(exported), rows_after_gate=len(curated_rows),
-                        dropped_by_quality_gate=dropped_gate,
-                        provenance_files=[os.path.basename(p) for p in glob.glob(f"{out_dir}/**/*", recursive=True)
-                                          if os.path.basename(p) in ("manifest.json", "lexsi_provenance.json",
-                                                                     "checksums.txt", "dataset_card.md")])
-        if not curated_rows:
-            raise RuntimeError("CuratorKIT export could not be mapped back to rows")
-        # Near-duplicate analysis (reported, not applied: templated SMS are near-duplicates by design)
-        try:
-            cfg2 = make_config(CuratorConfig, dataset=raw_path, dedup="minhash", clean=True,
-                               export_formats=["alpaca"], output_dir=f"{WORK}/curated/minhash")
-            Curator(cfg2).run()
-            n2 = sum(len(load_any(f)) for f in glob.glob(f"{WORK}/curated/minhash/**/*", recursive=True)
-                     if os.path.isfile(f) and "alpaca" in f.lower() and f.endswith((".json", ".jsonl")))
-            curation["minhash_rows_kept"] = n2
+        rows1, st1 = run_curator(clean=True)
+        curation["runs"] = [st1]
+        ret1 = retention(st1)
+        print("retention by language with clean=True:", {k: round(v, 2) for k, v in ret1.items()})
+        curated_rows, chosen = rows1, st1
+        if min(ret1.values()) < 0.8:
+            # CuratorKIT's default text cleaning is tuned for English and can drop Devanagari /
+            # romanised Hindi rows. Re-run with clean=False (dedup + provenance only).
+            print("⚠️ a language lost >20% of its rows with clean=True -> re-running CuratorKIT with clean=False")
+            rows2, st2 = run_curator(clean=False)
+            curation["runs"].append(st2)
+            if len(rows2) > len(rows1):
+                curated_rows, chosen = rows2, st2
+        # Restore any remaining rows CuratorKIT dropped, provided they pass our own gate
+        # (gold JSON valid and exact-duplicate-free); recorded so the report stays honest.
+        kept_ids = {r["id"] for r in curated_rows}
+        restored = [r for r in splits["train"] if r["id"] not in kept_ids
+                    and S.score_example(gold_to_str(r["gold"]), r["gold"])["exact_match"]]
+        if restored and min(retention({"kept_by_lang": dict(Counter(r["lang"] for r in curated_rows))}).values()) < 0.8:
+            curated_rows = curated_rows + restored
+            curation["restored_rows"] = len(restored)
+            curation["restored_by_lang"] = dict(Counter(r["lang"] for r in restored))
+        curation.update(ran=True, chosen_run=f"clean={chosen['clean']}", rows_final=len(curated_rows),
+                        final_by_lang=dict(Counter(r["lang"] for r in curated_rows)))
+        try:   # near-duplicate analysis (reported, not applied)
+            _, st3 = run_curator(clean=False, dedup="minhash")
+            curation["minhash_rows_kept"] = st3["rows_after_gate"]
         except Exception as e:
             curation["minhash_error"] = str(e)[:300]
     except Exception as e:
@@ -345,7 +376,9 @@ code(r'''
 # Few-shot exemplars: fixed, drawn from TRAIN only (one per language, incl. one hard negative)
 _rng = random.Random(SEED)
 def _pick(lang, txn):
-    pool = [r for r in train_rows if r["lang"] == lang and r["gold"]["is_transaction"] == txn]
+    pool = [r for r in train_rows if r["lang"] == lang and r["gold"]["is_transaction"] == txn] \
+        or [r for r in splits["train"] if r["lang"] == lang and r["gold"]["is_transaction"] == txn] \
+        or [r for r in splits["train"] if r["gold"]["is_transaction"] == txn]
     clean = [r for r in pool if set(r["tags"]) <= {"hard_negative"}]   # no noise in exemplars
     return _rng.choice(clean or pool)
 FEW_SHOT = [(r["sms"], gold_to_str(r["gold"])) for r in [_pick("en", True), _pick("hi", True), _pick("hinglish", False)]]

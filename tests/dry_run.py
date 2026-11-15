@@ -30,6 +30,29 @@ class _DS:
     def from_list(x): return x
 datasets.Dataset = _DS
 sys.modules["datasets"] = datasets
+# fake curatorkit: clean=True drops Devanagari rows (mimics what we saw on Kaggle)
+curatorkit = types.ModuleType("curatorkit")
+class CuratorConfig:
+    def __init__(self, dataset, dedup="exact", clean=True, export_formats=(), output_dir="."):
+        self.__dict__.update(locals())
+class _Res:
+    def print_summary(self): print("fake curator summary")
+class Curator:
+    def __init__(self, cfg): self.cfg = cfg
+    def run(self):
+        import json as _j, os as _o, re as _r
+        rows = [_j.loads(l) for l in open(self.cfg.dataset, encoding="utf-8")]
+        if self.cfg.clean:
+            rows = [x for x in rows if not _r.search("[\u0900-\u097F]", x["input"])]
+        if self.cfg.dedup == "minhash":
+            rows = rows[:11]
+        _o.makedirs(self.cfg.output_dir, exist_ok=True)
+        with open(_o.path.join(self.cfg.output_dir, "train_alpaca.jsonl"), "w", encoding="utf-8") as f:
+            for x in rows: f.write(_j.dumps(x, ensure_ascii=False) + "\n")
+        open(_o.path.join(self.cfg.output_dir, "lexsi_provenance.json"), "w").write("{}")
+        return _Res()
+curatorkit.Curator, curatorkit.CuratorConfig = Curator, CuratorConfig
+sys.modules["curatorkit"] = curatorkit
 
 MOCK_MODEL_CELL = r'''
 import torch
@@ -80,7 +103,7 @@ for i, c in enumerate(nb["cells"]):
         continue
     src = c["source"]
     if "def pip(" in src:
-        src = "OK_ALIGN = OK_CURATOR = OK_AUDIT = False\ndef pip(*a): return False\nimport torch\n"
+        src = "OK_ALIGN = OK_AUDIT = False\nOK_CURATOR = True\ndef pip(*a): return False\nimport torch\n"
     elif "Hugging Face login" in src:
         src = "HF_USERNAME = 'tester'; token = None; api = None\n"
     elif "AutoModelForCausalLM" in src and "def load_base" in src:
