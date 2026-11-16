@@ -2,7 +2,7 @@
 
 *Lexsi AI Safety & Alignment Hackathon · Track 1 (Fine-tuning & Data Curation) · Problem 5 (Structured output & extraction), also Problem 2 (replacing a closed-model API) and Problem 4 (multilingual & code-mixed)*
 
-**Model:** `CohereLabs/tiny-aya-global` + LoRA · **Toolkits:** CuratorKIT → AlignTune → AuditKIT
+**Author:** Anshul J Amin · **Model:** `CohereLabs/tiny-aya-global` + LoRA · **Toolkits:** CuratorKIT → AlignTune → AuditKIT
 **Links:** [LoRA adapter](https://huggingface.co/Meowniece/tiny-aya-sms-extract-v2-lora) · [GGUF (CPU)](https://huggingface.co/Meowniece/tiny-aya-sms-extract-v2-gguf) · [Dataset, predictions & logs](https://huggingface.co/datasets/Meowniece/tiny-aya-sms-extract-v2-data) · [Results explorer (Space)](https://huggingface.co/spaces/Meowniece/tiny-aya-sms-extract-v2-demo) · [GitHub](https://github.com/Anshul-Amin/tiny-aya-sms-extract)
 
 ---
@@ -19,7 +19,7 @@ Expense trackers, lending apps and personal-finance tools in India read billions
 
 ## 1. Why this problem
 
-A bank SMS looks simple until you meet real ones. *"Rs.2,999 spent at CROMA. Avl Lmt Rs.47,001"* has two amounts, and only one is the transaction; the other is a credit limit, not a balance. *"482913 is OTP for txn of INR 12,500 at AMAZON"* has an amount, a merchant and a card, but no money has moved. *"आपके खाते XX७७१२ में ₹२५,०००.०० जमा हुए"* uses Devanagari digits. Hinglish users type *"rs.500debit hue atm se"*.
+A bank SMS looks simple until you meet real ones. *"Rs.2,999 spent at CROMA. Avl Lmt Rs.47,001"* has two amounts, and only one is the transaction; the other is a credit limit, not a balance. *"482913 is OTP for txn of INR 12,500 at AMAZON"* has an amount and a merchant, but no money has moved. *"आपके खाते XX७७१२ में ₹२५,०००.०० जमा हुए"* uses Devanagari digits. Hinglish users type *"rs.500debit hue atm se"*.
 
 For downstream finance apps, **a wrong value is worse than a missing one**: an invented balance or a phantom transaction corrupts a budget silently. So we optimise and report not just accuracy, but **hallucination**: how often the model fills a field that the SMS does not contain.
 
@@ -29,7 +29,7 @@ For downstream finance apps, **a wrong value is worse than a missing one**: an i
 
 **Model: Tiny Aya Global (3.35B).**
 - **Language balance.** It is the Tiny Aya variant tuned for balanced performance across languages and regions. Our inputs mix English, Hindi and romanised Hindi in the same message, so a balanced variant is the safer default. *Tiny Aya Fire* (South-Asia specialised) is a natural follow-up comparison.
-- **Size fits the budget.** At 3.35B parameters, LoRA fine-tuning and batched inference both fit on one free 16 GB T4, and an 8-bit GGUF export can run on CPU. Aya Expanse 8B/32B would be more capable, but they cannot be fine-tuned on free hardware or served cheaply on-premise, and cheap on-premise serving is the point of the ROI argument.
+- **Size fits the budget.** At 3.35B parameters, LoRA fine-tuning and batched inference both fit on one free 16 GB T4, and we also publish an 8-bit GGUF export for CPU inference. Aya Expanse 8B/32B would be more capable, but they cannot be fine-tuned on free hardware or served cheaply on-premise, and cheap on-premise serving is the point of the ROI argument.
 - **Small output space.** The output is short and structured (~80 tokens), so model size matters less than format discipline. Fine-tuning targets format discipline directly.
 
 **Data: synthetic, with exact labels.** See section 3 for why we generated the data and exactly how.
@@ -86,10 +86,10 @@ JSON: {"is_transaction": true, "type": "debit", "amount": 164945.77, "currency":
 
 ### 3.4 Curation and validation
 
-- **CuratorKIT.** The training split is exported in Alpaca format and run through CuratorKIT for cleaning, exact de-duplication and provenance (manifest, checksums, `lexsi_provenance.json`, dataset card). Curation report: 1,600 rows in → CuratorKIT exact de-dup exported 1,108 (its exact matching ignores the SMS text, so different messages with identical labels collapse) → our JSON gate restored the 492 valid rows → 1,600 final; MinHash would have kept only 25.
+- **CuratorKIT.** The training split is exported in Alpaca format and run through CuratorKIT for cleaning, exact de-duplication and provenance (manifest, checksums, `lexsi_provenance.json`, dataset card). Curation report: 1,600 rows in → CuratorKIT exact de-dup exported 1,108 (its exact matching ignores the SMS text, so the 493 non-transaction rows, which all share the same all-null answer, collapsed into one) → our JSON gate restored the 492 valid rows → 1,600 final; MinHash would have kept only 25.
 - **Our JSON quality gate.** After curation, every row's output must still parse to JSON identical to its gold label, or it is dropped.
 - **Why no near-duplicate removal.** We ran MinHash near-duplicate detection and report its count, but did not apply it: templated SMS are near-duplicates *by design* yet carry different labels, so removing them would delete exactly the minimal pairs the model needs.
-- **Automated checks** (`tests/test_core.py`, run before every training run):
+- **Automated checks** (`tests/test_core.py`):
   - every gold value is grounded in the SMS text;
   - all 2,364 gold labels are schema-valid and score 100% against themselves (checked during the audit);
   - no SMS appears in more than one split;
@@ -120,7 +120,7 @@ Fine-tuning: **AlignTune** `create_sft_trainer` (TRL backend; path used: `alignt
 | **Non-transaction F1** | catching OTPs, offers, reminders, future debits | A phantom transaction is the most damaging error for downstream apps. |
 | **Schema validity** | parseable JSON, right keys and types | The integration contract: invalid output needs retries or a human. |
 
-Matching is lenient on formatting (case, whitespace, `1,23,456` vs `123456`, Devanagari digits) and strict on meaning. Significance uses a paired exact McNemar test; intervals use bootstrap resampling.
+Matching is lenient on formatting (case, whitespace, `1,23,456` vs `123456`, Devanagari digits) and strict on meaning. Significance uses a paired exact McNemar test; 95% intervals use bootstrap resampling of test examples.
 
 ## 5. Results
 
@@ -150,6 +150,15 @@ Matching is lenient on formatting (case, whitespace, `1,23,456` vs `123456`, Dev
 | few_shot | 25.0 | 84.7 | 25.3 | 15.3 | 80.0 | 86.4 |
 | ft_no_robust_data | 47.7 | 96.7 | 46.5 | 0.4 | 13.3 | 97.7 |
 | **fine_tuned** | 70.5 | 92.0 | 10.1 | 6.6 | 81.5 | 100.0 |
+
+### How precise are these numbers? (exact match, 95% bootstrap interval)
+| System | Seen formats | Unseen formats | Hand-written |
+|---|---|---|---|
+| regex | 31.0 [26.0, 36.3] | 46.7 [41.0, 52.3] | 25.0 [13.6, 38.6] |
+| few_shot | 26.0 [21.0, 31.0] | 21.0 [16.7, 25.7] | 25.0 [13.6, 38.6] |
+| **fine_tuned** | **92.0 [88.7, 95.0]** | **85.0 [81.0, 88.7]** | **70.5 [56.8, 84.1]** |
+
+The hand-written set is small (44 messages), so its interval is wide; the intervals never overlap with the baselines.
 
 ### Is the improvement real? (paired exact McNemar test on exact match)
 | Comparison | Split | FT wins | Other wins | McNemar p |
@@ -216,4 +225,45 @@ Matching is lenient on formatting (case, whitespace, `1,23,456` vs `123456`, Dev
 - **The robustness data is what makes it safe.** Trained on the same amount of clean data, the ablation scores well on field accuracy but cannot tell an OTP, offer or future debit from a real transaction (non-transaction F1 46.8% vs 98.2% on unseen formats) and hallucinates 43% of null fields. The improvement is significant on every split (McNemar p ≤ 0.021).
 - **Training long enough mattered as much as the data.** With one epoch the model reproduced only 69% of its own training answers (dev exact match 70%); three epochs reached 95.8% on dev, 92.0 / 85.0 / 70.5% on the test sets. Both runs are published.
 - **Check what the trainer actually sees.** Tiny Aya's chat template adds a ~400-token default preamble, so our first run (max length 512) silently cut every JSON answer off: 99.8% token accuracy, ~2% exact match. A sanity check (can the model reproduce 16 training answers?) and a log of the last tokens of a training example now guard against this.
-- **Still hard:** promotional text appended to a real transaction, Devanagari-digit account numbers and references, and English messages in the hand-written set (57.9% vs 75–85% for Hindi/Hinglish).
+- **Still hard:** the direction of money in wordings the model never saw ("Salary aa gayi", "refund … processed to Card", "वेतन जमा" are credits, but are sometimes labelled debit), copying long digit strings exactly (a transposed account number, an amount read from Devanagari digits), and English messages in the hand-written set (57.9% vs 75–85% for Hindi/Hinglish).
+
+Most frequent remaining errors (fine-tuned, unseen + challenge): type (31), amount (17), counterparty (12), reference (9), currency (9), is_transaction (8), across 58 wrong examples. Every error, with gold and prediction, is in `results/error_analysis_fine_tuned.csv`.
+
+## 7. What this means in practice
+
+- **Drop-in for an API call:** same input (one SMS), same output (one JSON object); the schema-validity rate shows how often a retry would be needed.
+- **Safer by default:** a lower hallucination rate and higher non-transaction F1 mean fewer phantom transactions and invented balances in users' budgets.
+- **Works for how Indians actually text:** Hindi script, Hinglish, Devanagari digits and Indian number grouping are supported natively, with no transliteration step.
+- **Private:** a 3B model can run on-premise, so no financial SMS has to leave the company's infrastructure.
+
+## 8. ROI: replacing a closed-model API
+
+Scenario: **10,000,000 SMS / month** · avg 276 input + 75 output tokens per SMS
+
+| Option | Throughput | GPU hours / month | Cost / month (USD) | Cost / 1M SMS (USD) |
+|---|---|---|---|---|
+| Tiny Aya fine-tuned, self-hosted, pay-per-hour (Tesla T4 @ $0.35/h) | 1.12 SMS/s · 83 tok/s per GPU | 2,490 (≈3.4 T4s running full time) | **871.52** | **87.15** |
+| gpt-5-mini API (list price; excludes reasoning tokens) | – | – | 2,198.59 | 219.86 |
+| gpt-5.4-mini API (list price; excludes reasoning tokens) | – | – | 5,464.01 | 546.40 |
+
+Throughput is measured, unoptimised Hugging Face `generate` with batch 32 on a free T4; a serving engine (vLLM/TGI) would raise it and cut the self-hosted cost further. One-time fine-tuning cost: about $0.56 (96 min on a T4).
+
+Method: realistic volume (10,000,000 SMS/month) ÷ measured throughput (83 generated tokens/s, batched greedy decoding on a T4) → GPU hours × hourly GPU price. API cost uses list prices and our measured average prompt/answer lengths (counted with Tiny Aya's tokenizer, an approximation). GPT-5-family models may also bill hidden reasoning tokens, so API figures are a **lower bound**. We also publish an 8-bit GGUF export for **CPU** inference with llama.cpp (we have not benchmarked its CPU speed or accuracy), which makes on-device or on-premise extraction possible: a privacy win for financial data.
+
+**Licence note:** Tiny Aya is released under CC-BY-NC. A commercial deployment needs a licence from Cohere; the cost comparison is about compute, not licensing.
+
+## 9. Limitations
+
+- **Synthetic training data.** Real SMS are more diverse than our 111 templates. The hand-written challenge set and the unseen-format split are our guard against overfitting, but they are small (44 and 300 examples). Results on real bank traffic will be lower.
+- **One author wrote both the generator and the challenge set**, so some stylistic bias is unavoidable. Native-speaker review of more Hindi/Hinglish messages would strengthen it.
+- **Romanised Hindi has no standard spelling.** We cover common spellings only.
+- **Schema decisions are opinions:** failed transactions count as transactions with `status: failed`; future debits do not. Other apps may want different rules.
+- **Single seed** (free GPU budget). Confidence intervals come from bootstrap resampling of examples, not from repeated training runs.
+- **Run selection.** We trained two runs that differ only in the number of epochs (1 vs 3). We moved to 3 epochs because the 1-epoch model reproduced only 69% of its own training answers (underfitting, measured on training data). We chose the 3-epoch run with a rule fixed before seeing its test scores: it had to match or beat the 1-epoch run on dev and on unseen-format exact match. Because a test split took part in that choice, its number may be slightly optimistic. The hand-written challenge set was never used for any decision, and it improved by a similar margin (59.1% → 70.5%). Both runs are published.
+- **Dates are assumed day-first** (Indian convention).
+
+## 10. Reproduce
+
+Open the notebook on Kaggle (T4, internet on), add an `HF_TOKEN` secret, *Run all*. `QUICK_MODE=True` runs the whole pipeline on tiny subsets in about 40 minutes; the full run takes about 4 hours on a T4. All seeds are fixed. Every split, prediction, metric file, CuratorKIT provenance file and AuditKIT run record is in the dataset repo.
+
+*Built with Lexsi Labs' CuratorKIT, AlignTune and AuditKIT on Cohere Labs' Tiny Aya Global.*
