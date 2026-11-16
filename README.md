@@ -2,6 +2,7 @@
 
 **Lexsi AI Safety & Alignment Hackathon 2026 · Track 1 (Fine-tuning & Data Curation)**
 **Problem statements:** #5 Structured output & extraction (primary), #2 Replacing a closed-model API, #4 Low-resource & multilingual / code-mixed
+**Author:** Anshul J Amin
 **Model:** `CohereLabs/tiny-aya-global` (3.35B) + LoRA · **Lexsi repos used:** CuratorKIT → AlignTune → AuditKIT
 
 Fine-tuning a small open model to read one transaction SMS and return one schema-valid JSON object, without inventing fields, and to recognise messages that mention money but are **not** transactions (OTPs, offers, reminders, future debits, money requests).
@@ -51,7 +52,7 @@ The `-v2` repos are the submission (3 epochs). The repos without `-v2` hold the 
 | `data/challenge_set.py` → `.jsonl` | Hand-written challenge set |
 | `space/` | Gradio live demo (GGUF on CPU, transformers fallback); run locally, or on a Space with HF PRO |
 | `space_static/` | Static results explorer published as the free HF Space |
-| `docs/ARTICLE.md`, `docs/ABSTRACT.md` | Final write-up and abstract (from the 3-epoch run) |
+| `docs/ARTICLE.md`, `docs/ABSTRACT.md` | Final write-up (same as the [Hugging Face write-up](https://huggingface.co/Meowniece/tiny-aya-sms-extract-writeup)) and abstract |
 | `docs/ARTICLE_TEMPLATE.md`, `docs/ABSTRACT_TEMPLATE.md` | Templates the notebook fills with real numbers |
 | `tests/test_core.py` | Model-free tests (labels grounded in text, no leakage, scoring) |
 | `tests/dry_run.py` | Runs the entire notebook on CPU with a fake model (plumbing test) |
