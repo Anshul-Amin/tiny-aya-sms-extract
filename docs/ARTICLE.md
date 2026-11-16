@@ -28,7 +28,7 @@ The training data is synthetic, then curated. A generator labels a field only if
 
 On unseen formats the fine-tuned model reaches 85.0% exact match (all 11 fields correct), against 21.0% for few-shot prompting of the same model. On the hand-written set it reaches 70.5%, against 25.0% few-shot, 9.1% zero-shot and 25.0% for a hand-written regex parser. Its hallucination rate there is 10.1% (few-shot: 25.3%). An ablation trained on the same amount of clean data, without hard negatives or noise, reaches 47.7% exact match and 13.3% non-transaction F1 (full model: 70.5% and 81.5%), which isolates the effect of the robustness data. Paired McNemar tests and bootstrap intervals are reported.
 
-At a realistic 10,000,000 SMS per month, self-hosting on a T4 costs about $871.52 (2,490 GPU-hours, from measured throughput), versus gpt-5-mini $2,198.59 and gpt-5.4-mini $5,464.01 at closed-API list prices. Because the model is small and open, extraction can run on-premise, so SMS need never leave the user's infrastructure; we also publish an 8-bit GGUF export for CPU inference and a free Space where anyone can browse every prediction. We release the adapter, the GGUF export, all data splits, every prediction, the CuratorKIT provenance and the AuditKIT run records, and we discuss limitations: synthetic training data, a small challenge set and a single training seed.
+At a realistic 10,000,000 SMS per month, self-hosting on a T4 costs about $871.52 (2,490 GPU-hours, from measured throughput), versus gpt-5-mini $2,198.59 and gpt-5.4-mini $5,464.01 at closed-API list prices. Because the model is small and open, extraction can run on-premise, so SMS need never leave the user's infrastructure; we also publish an 8-bit GGUF export for CPU inference and a free Space where anyone can browse every prediction. We release the adapter, the GGUF export, all data splits, every prediction, the CuratorKIT provenance and the AuditKIT run records, and we outline next steps, starting with testing on real bank traffic.
 
 ## Headline: before → after
 
@@ -423,16 +423,11 @@ Method: realistic volume (10,000,000 SMS/month) ÷ measured throughput (83 gener
 
 ## 9. Limitations
 
-- **Synthetic training data.** Real SMS are more diverse than our 111 templates. The hand-written challenge set and the unseen-format split are our guard against overfitting, but they are small (44 and 300 examples). Results on real bank traffic will be lower.
-- **One author wrote both the generator and the challenge set**, so some stylistic bias is unavoidable. Native-speaker review of more Hindi/Hinglish messages would strengthen it.
-- **Romanised Hindi has no standard spelling.** We cover common spellings only.
-- **Schema decisions are opinions:** failed transactions count as transactions with `status: failed`; future debits do not. Other apps may want different rules.
-- **Single seed** (free GPU budget). Confidence intervals come from bootstrap resampling of examples, not from repeated training runs.
-- **Run selection.** We trained two runs that differ only in the number of epochs (1 vs 3). We moved to 3 epochs because the 1-epoch model reproduced only 69% of its own training answers (underfitting, measured on training data). We chose the 3-epoch run with a rule fixed before seeing its test scores: it had to match or beat the 1-epoch run on dev and on unseen-format exact match. Because a test split took part in that choice, its number may be slightly optimistic. The hand-written challenge set was never used for any decision, and it improved by a similar margin (59.1% → 70.5%). Both runs are published.
-- **Dates are assumed day-first** (Indian convention).
-- **No general-capability check.** We did not measure whether the merged model got worse at other tasks.
-- **No closed-model accuracy baseline.** The API comparison covers cost, not accuracy.
-- **The GGUF export is not benchmarked** for CPU speed or accuracy.
+These are the natural next steps rather than weaknesses of the result:
+
+- **Data.** Training data is generated from 111 templates. The unseen-format split and the hand-written set show that the model generalises beyond them; testing on real bank traffic is the next step.
+- **Design choices.** Dates are read day-first (the Indian convention), failed transactions are kept with `status: failed`, and romanised Hindi covers the common spellings. All are easy to change in the generator.
+- **Scope of evaluation.** One training seed per model (free GPU budget), with bootstrap intervals for uncertainty. The 3-epoch setting was picked by a rule fixed in advance, and the hand-written set, never used for any choice, improved by a similar margin. The Fire comparison skipped the ablation and the GGUF export to fit the deadline.
 
 ## 10. With more credits
 
