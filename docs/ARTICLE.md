@@ -1,4 +1,4 @@
-# Teaching a 3B model to read Indian bank SMS, in English, Hindi and Hinglish, without making things up
+# Turning Indian bank & UPI SMS into reliable JSON: a fine-tuned 3B open model that replaces a closed-LLM API (English, Hindi, Hinglish)
 
 **One-line claim:** A LoRA fine-tune of Cohere's Tiny Aya Global (3.35B), trained on synthetic, CuratorKIT-curated data, turns Indian bank and UPI SMS into exact 11-field JSON, reaching **85.0%** exact match on message formats it never saw, against **21.0%** for few-shot prompting of the same model, with **2.0%** hallucinated fields against 21.3%.
 
