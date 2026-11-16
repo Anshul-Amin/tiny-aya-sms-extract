@@ -9,7 +9,7 @@
 
 ## TL;DR
 
-Expense trackers, lending apps and personal-finance tools in India read billions of transaction SMS a year. Many send each message to a closed LLM API. We fine-tuned **Tiny Aya Global (3.35B)** to turn one SMS into one schema-valid JSON object (11 fields), in **English, Hindi (Devanagari) and Hinglish**. It also recognises when a message mentions money but is **not** a transaction: OTPs, offers, bill reminders, future debits and money requests.
+Expense trackers, lending apps and personal-finance tools in India read billions of transaction SMS a year. Many send each message to a closed LLM API. We fine-tuned **Tiny Aya Global (3.35B)** to turn one SMS into one schema-valid JSON object (11 fields), in **English, Hindi (Devanagari) and Hinglish**. It also recognises when a message mentions money but is **not** a transaction: OTPs, offers, bill reminders, future debits and money requests. The training data is **synthetic, with exact labels, and curated with CuratorKIT** before fine-tuning.
 
 - On message formats it **never saw in training**, the fine-tuned model reaches **85.0%** exact match (all 11 fields right), vs **21.0%** for few-shot prompting of the same model.
 - On a **hand-written challenge set** of realistic, messy SMS: **70.5%** exact match vs 25.0% (few-shot), 9.1% (zero-shot) and 25.0% (a hand-written regex parser).
@@ -32,9 +32,9 @@ For downstream finance apps, **a wrong value is worse than a missing one**: an i
 - **Size fits the budget.** At 3.35B parameters, LoRA fine-tuning and batched inference both fit on one free 16 GB T4, and we also publish an 8-bit GGUF export for CPU inference. Aya Expanse 8B/32B would be more capable, but they cannot be fine-tuned on free hardware or served cheaply on-premise, and cheap on-premise serving is the point of the ROI argument.
 - **Small output space.** The output is short and structured (~80 tokens), so model size matters less than format discipline. Fine-tuning targets format discipline directly.
 
-**Data: synthetic, with exact labels.** See section 3 for why we generated the data and exactly how.
+**Data: synthetic, then curated.** We generated the messages ourselves (exact labels, no personal data), then curated them with CuratorKIT and our own quality gate before training. Section 3 explains why, and exactly how.
 
-## 3. The dataset: why synthetic, and how it was built
+## 3. The dataset: synthetic, then curated
 
 ### 3.1 Why we generated the data instead of collecting it
 
@@ -84,7 +84,10 @@ JSON: {"is_transaction": true, "type": "debit", "amount": 164945.77, "currency":
 | test_ood (**unseen formats**) | 300 | 98 / 109 / 93 | 85 | 19 | 12 | 68 / 16 |
 | challenge (**hand-written**) | 44 | 19 / 12 / 13 | 14 | – | – | – |
 
-### 3.4 Curation and validation
+### 3.4 Curation with CuratorKIT, and validation
+
+Generation gives us raw data; curation decides what the model actually trains on. Every training row passed through the same curation pipeline, and every step is recorded in the dataset repo (`curatorkit_run/`).
+
 
 - **CuratorKIT.** The training split is exported in Alpaca format and run through CuratorKIT for cleaning, exact de-duplication and provenance (manifest, checksums, `lexsi_provenance.json`, dataset card). Curation report: 1,600 rows in → CuratorKIT exact de-dup exported 1,108 (its exact matching ignores the SMS text, so the 493 non-transaction rows, which all share the same all-null answer, collapsed into one) → our JSON gate restored the 492 valid rows → 1,600 final; MinHash would have kept only 25.
 - **Our JSON quality gate.** After curation, every row's output must still parse to JSON identical to its gold label, or it is dropped.
