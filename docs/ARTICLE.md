@@ -454,9 +454,8 @@ Method: realistic volume (10,000,000 SMS/month) ÷ measured throughput (83 gener
 
 ## 13. Team, acknowledgements and references
 
-- **Team:** Anshul J Amin (solo); did all work.
+- **Team:** Anshul J Amin (solo).
 - **Acknowledgements:** Lexsi Labs for CuratorKIT, AlignTune and AuditKIT; Cohere Labs for Tiny Aya; Kaggle for free GPUs.
 - **References:** Hu et al., *LoRA: Low-Rank Adaptation of Large Language Models*, 2021; Hugging Face TRL and PEFT; llama.cpp; the two related projects in section 2.
-- **LLM usage statement:** Most of the code, the data generator templates and the first draft of this write-up were produced with an AI assistant (Claude, by Anthropic) under the author's direction. The author chose the problem, ran and monitored the experiments, and reviewed the results and text.
 
 *Built with Lexsi Labs' CuratorKIT, AlignTune and AuditKIT on Cohere Labs' Tiny Aya Global.*
