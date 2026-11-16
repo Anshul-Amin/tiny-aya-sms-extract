@@ -32,29 +32,68 @@ For downstream finance apps, **a wrong value is worse than a missing one**: an i
 - **Size fits the budget.** At 3.35B parameters, LoRA fine-tuning and batched inference both fit on one free 16 GB T4, and an 8-bit GGUF export can run on CPU. Aya Expanse 8B/32B would be more capable, but they cannot be fine-tuned on free hardware or served cheaply on-premise, and cheap on-premise serving is the point of the ROI argument.
 - **Small output space.** The output is short and structured (~80 tokens), so model size matters less than format discipline. Fine-tuning targets format discipline directly.
 
-**Data: synthetic, with exact labels.** Real bank SMS contain account numbers, balances and names, so they cannot be collected or published responsibly. Synthetic generation gives (a) **exact gold labels**, (b) **full control over edge cases**, and (c) a **publishable dataset**. The risk of synthetic data is overfitting to templates. We counter it with a template-level held-out split and a hand-written challenge set.
+**Data: synthetic, with exact labels.** See section 3 for why we generated the data and exactly how.
 
-## 3. Data: exact labels by construction
+## 3. The dataset: why synthetic, and how it was built
 
-We wrote a generator (`smsgen.py`) with **14 message families × 3 languages**: UPI debit/credit, card spend (incl. foreign currency), ATM, NEFT/IMPS/RTGS in and out, refunds & reversals, failed transactions, EMI/AutoPay/NACH, and **5 hard-negative families** (OTP, promo, bill due, scheduled debit, balance info).
+### 3.1 Why we generated the data instead of collecting it
 
-Key design choices:
+- **No usable public dataset exists.** We found no public, field-labelled dataset of Indian bank/UPI SMS, and none in Hindi or Hinglish. The closest public projects are a regex library ([transaction-sms-parser](https://github.com/saurabhgupta050890/transaction-sms-parser), MIT) that ships a single example message, and a GPT-2 parser ([banking-sms-json-parser-v8](https://huggingface.co/rawsun00001/banking-sms-json-parser-v8)) trained on 60k synthetic English messages whose data is not released.
+- **Real SMS are personal financial data.** They contain account digits, balances, names and UPI IDs. Collecting them from people's phones and publishing them would need informed consent under India's Digital Personal Data Protection Act, 2023, and could not be released as an open dataset. The hackathon also asks us to host the data publicly.
+- **Exact labels make the safety metric possible.** Hand-labelling real SMS is slow and noisy. In particular, nobody can say with certainty whether an annotator "invented" a field. With generated data, every label is known, so we can measure hallucination exactly.
+- **Control.** We can create the hard cases on purpose, such as OTPs that mention amounts or credit limits next to the real amount, and hold out entire message formats to test generalisation.
 
-1. **Segment templates → exact gold.** Each template is split into segments. Optional segments are randomly dropped and messages are sometimes truncated. A field is labelled **only if its text survived**, so the gold never asks the model to know something that is not in the message. This is what makes the hallucination metric meaningful.
-2. **Template-level held-out split.** For every (family, language), one template is never used for training. `test_ood` contains only those formats, so it measures **generalisation to unseen message formats**, not memorisation of templates.
-3. **Edge cases as first-class data:** Indian digit grouping (₹1,23,456.50), 8 date formats (day-first), masked accounts (`XX1234`, `*1234`, `ending 1234`), credit-limit distractors, promo tails with extra amounts, ALL CAPS / lowercase, missing spaces (`Rs.450debited`), Devanagari numerals, sender headers and footers.
-4. **Responsible synthetic data:** all bank names are fictional and messages contain no links or phone numbers, so the dataset can't be confused with, or reused as, real bank messages. No real customer data was used.
-5. **Hand-written challenge set (44 SMS):** written and labelled by hand in styles the generator never produces (reordered fields, pipe-separated alerts, "Cr/Dr" abbreviations, money requests, cashback credits, mixed scripts).
+The risk of synthetic data is that a model learns the templates instead of the task. Sections 3.3 and 5 show how we test for that: a split made only of unseen formats, and a hand-written set from outside the generator.
 
-| Split | Size | Purpose |
-|---|---|---|
-| train (after CuratorKIT) | 1,600 | fine-tuning |
-| dev | 120 | prompt-format choice only |
-| test_id | 300 | seen formats, new values |
-| test_ood | 300 | **unseen formats** |
-| challenge | 44 | **hand-written, messy** |
+### 3.2 How each message is built
 
-**CuratorKIT.** The training split is exported in Alpaca format and run through CuratorKIT (cleaning, exact de-duplication, provenance: manifest, checksums, `lexsi_provenance.json`). We then add our own **quality gate**: every curated row's output must still parse to JSON identical to its gold label, otherwise it is dropped. We also ran MinHash near-duplicate detection and report its count, but did not apply it: templated SMS are near-duplicates *by design* yet carry different labels, so near-dup removal would delete exactly the minimal pairs the model needs. Curation report: `1,600 rows in → CuratorKIT exact de-dup exported 1,108 (its exact matching ignores the SMS text, so different messages with identical labels collapse) → our JSON gate restored the 492 valid rows → 1,600 final; MinHash would have kept only 25`
+The generator is `src/smsgen.py`; everything is seeded (seed 7), so the dataset is exactly reproducible.
+
+1. **Templates.** We wrote **111 templates**: 9 transaction families × 3 languages × 3 templates, plus 5 non-transaction families × 3 languages × 2 templates. Families: UPI debit, UPI credit, card spend, ATM withdrawal, transfer in, transfer out (NEFT/IMPS/RTGS), refund/reversal, failed transaction, AutoPay/EMI/NACH, and the non-transactions OTP, promotional offer, bill due, scheduled (future) debit, and balance information. Templates follow the general shape of common Indian bank alerts but are written from scratch; no real message was copied. All bank names are fictional (e.g. Kestrel Bank, Monsoon Bank) and messages contain no links or phone numbers, so they can't be mistaken for, or reused as, real bank messages.
+2. **Values.** Each slot is sampled independently:
+   - **Amounts** log-uniform from ₹1 to ₹5,00,000 (60% with paise), written in Indian (1,23,456), Western (123,456) or plain grouping, with ₹ / Rs. / INR / रु. / रुपये / "rupaye". Card spends are sometimes in USD, EUR, GBP or AED.
+   - **Dates** uniform over 2025–2026, in 8 day-first formats (14-11-26, 14/11/2026, 14Nov26, 2026-11-14, …).
+   - **Accounts and cards** masked in 8 styles (XX1234, \*1234, ending 1234, XXXX-1234, …).
+   - **References**: 12-digit UPI RRNs, 16-character NEFT/RTGS UTRs and alphanumeric references.
+   - **Counterparties** from 23 merchants, 15 person names, 6 employers, subscriptions, billers and generated UPI IDs (e.g. `ramesh.k82@saffron`).
+3. **Labels by construction.** Each template is split into segments. The first segment is always kept; each later segment is dropped with probability 0.15, and 10% of messages are truncated. **A field is labelled only if the segment that prints it survived**, so a gold label never asks for information the SMS does not contain. Non-transaction messages have every field null except `is_transaction: false`, even when they mention amounts, merchants or cards.
+4. **Real-world noise.** 35% of messages get one or two perturbations that never change the label: missing or doubled spaces (`Rs.450debited`), bank headers (`BNYN:`) and footers, promotional tails with extra amounts ("Win vouchers worth Rs 500"), ALL CAPS or lowercase (English/Hinglish), and Devanagari digits (Hindi).
+5. **Mix.** 30% of messages come from the non-transaction families (hard negatives).
+
+Example (Hindi, with Indian grouping and a credit-limit distractor):
+
+```
+SMS:  कार्ड **** 6735से ₹1,64,945.77 का लेनदेन ZOMATO पर, 2025-02-07। संदर्भ 186747152035। उपलब्ध क्रेडिट लिमिट रुपये 64,582।
+JSON: {"is_transaction": true, "type": "debit", "amount": 164945.77, "currency": "INR", "account_last4": "6735",
+       "instrument": "CARD", "counterparty": "ZOMATO", "date": "2025-02-07", "reference": "186747152035",
+       "balance": null, "status": "success"}
+```
+
+### 3.3 Splits that test generalisation, not memorisation
+
+- **Template-level hold-out.** For every (family, language) pair, the last template is never used for training. `test_ood` contains **only** those 42 unseen formats.
+- **No overlap.** No SMS appears twice in the generated data, and none of the hand-written challenge messages appears in it; a test checks both.
+- **Hand-written challenge set (44 SMS).** Written and labelled by hand in styles the generator never produces: reordered fields, pipe-separated alerts, "Cr/Dr" abbreviations, money requests, cashback credits and mixed scripts.
+- **Ablation data.** Same generator, same size, different seed, but with no hard negatives, no noise and no dropped fields.
+
+| Split | Size | en / hi / hinglish | Non-transactions | Promo tails | Devanagari digits | Missing fields / truncated |
+|---|---|---|---|---|---|---|
+| train | 1,600 | 550 / 560 / 490 | 493 | 126 | 49 | 390 / 103 |
+| dev (format choice only) | 120 | 48 / 33 / 39 | 38 | 11 | 2 | 37 / 6 |
+| test_id (seen formats) | 300 | 94 / 114 / 92 | 84 | 34 | 12 | 90 / 22 |
+| test_ood (**unseen formats**) | 300 | 98 / 109 / 93 | 85 | 19 | 12 | 68 / 16 |
+| challenge (**hand-written**) | 44 | 19 / 12 / 13 | 14 | – | – | – |
+
+### 3.4 Curation and validation
+
+- **CuratorKIT.** The training split is exported in Alpaca format and run through CuratorKIT for cleaning, exact de-duplication and provenance (manifest, checksums, `lexsi_provenance.json`, dataset card). Curation report: 1,600 rows in → CuratorKIT exact de-dup exported 1,108 (its exact matching ignores the SMS text, so different messages with identical labels collapse) → our JSON gate restored the 492 valid rows → 1,600 final; MinHash would have kept only 25.
+- **Our JSON quality gate.** After curation, every row's output must still parse to JSON identical to its gold label, or it is dropped.
+- **Why no near-duplicate removal.** We ran MinHash near-duplicate detection and report its count, but did not apply it: templated SMS are near-duplicates *by design* yet carry different labels, so removing them would delete exactly the minimal pairs the model needs.
+- **Automated checks** (`tests/test_core.py`, run before every training run):
+  - every gold value is grounded in the SMS text;
+  - all 2,364 gold labels are schema-valid and score 100% against themselves (checked during the audit);
+  - no SMS appears in more than one split;
+  - the challenge set is valid.
 
 ## 4. Systems compared
 
