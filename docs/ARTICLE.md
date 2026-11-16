@@ -13,7 +13,7 @@
 
 > ### For judges: one minute
 > - **Task:** one bank/UPI SMS in (English, Hindi or Hinglish) → one JSON object with 11 fields, or `is_transaction: false` for OTPs, offers, reminders, future debits and balance alerts.
-> - **Base model + method:** `CohereLabs/tiny-aya-global` (3.35B) + LoRA (r=16) SFT with **AlignTune**, on 1,600 synthetic messages curated with **CuratorKIT**, evaluated with **AuditKIT**, on one free Kaggle T4.
+> - **Base model + method:** `CohereLabs/tiny-aya-global` (3.35B; also compared with `tiny-aya-fire`, which scored higher: 88.7% unseen, 79.5% hand-written) + LoRA (r=16) SFT with **AlignTune**, on 1,600 synthetic messages curated with **CuratorKIT**, evaluated with **AuditKIT**, on one free Kaggle T4.
 > - **Before → after (same model, few-shot prompt → fine-tuned), exact match on all 11 fields:** seen formats **26.0% → 92.0%**, unseen formats **21.0% → 85.0%**, hand-written messages **25.0% → 70.5%**. Hallucinated fields on unseen formats **21.3% → 2.0%**.
 > - **Why it's credible:** whole message formats held out of training, a separate hand-written test set, an ablation without the robustness data, paired McNemar tests (p ≤ 0.021 everywhere), bootstrap intervals, and every prediction published.
 > - **Artifacts:** [models collection](https://huggingface.co/collections/Meowniece/tiny-aya-sms-extraction-models-6af9a1a0ced10d8fb22b4ed6) · [datasets collection](https://huggingface.co/collections/Meowniece/tiny-aya-sms-extraction-datasets-6afa2f2876dd2d18a69a3e77) · [results explorer](https://huggingface.co/spaces/Meowniece/tiny-aya-sms-extract-v2-demo) · [GitHub](https://github.com/Anshul-Amin/tiny-aya-sms-extract)
@@ -73,7 +73,7 @@ These were our questions from the start; we did not formally pre-register hypoth
 **Task.** SMS-to-JSON extraction is a high-volume, repetitive, well-defined job. That is exactly the kind of workload that is usually sent to a closed API and should not need one (Problem 2). It is checkable field by field, so improvement can be measured without an LLM judge (Problem 5). And in India it is inherently multilingual and code-mixed (Problem 4).
 
 **Model: Tiny Aya Global (3.35B).**
-- **Language balance.** It is the Tiny Aya variant tuned for balanced performance across languages and regions. Our inputs mix English, Hindi and romanised Hindi in the same message, so a balanced variant is the safer default. *Tiny Aya Fire* (South-Asia specialised) is a natural follow-up comparison.
+- **Language balance.** It is the Tiny Aya variant tuned for balanced performance across languages and regions. Our inputs mix English, Hindi and romanised Hindi in the same message, so a balanced variant is the safer default. We also ran the identical pipeline on *Tiny Aya Fire* (South-Asia specialised); see section 8.4.
 - **Size fits the budget.** At 3.35B parameters, LoRA fine-tuning and batched inference both fit on one free 16 GB T4, and we also publish an 8-bit GGUF export for CPU inference. Aya Expanse 8B/32B would be more capable, but they cannot be fine-tuned on free hardware or served cheaply on-premise, and cheap on-premise serving is the point of the ROI argument.
 - **Small output space.** The output is short and structured (~80 tokens), so model size matters less than format discipline. Fine-tuning targets format discipline directly.
 
@@ -107,7 +107,7 @@ smsgen.py ──► CuratorKIT ──► JSON gate ──► AlignTune (LoRA SFT
 
 - **Used for:** the supervised fine-tuning of the main model and of the ablation model.
 - **Features used:** `create_sft_trainer` with the **TRL backend**; built-in **PEFT LoRA** (`use_peft=True`, `lora_r=16`, `lora_alpha=32`, `lora_dropout=0.05`); chat-format (`messages`) datasets, which AlignTune renders with the model's own chat template; `precision="fp16"`; gradient checkpointing; `max_seq_length`.
-- **Our settings:** 3 epochs, per-device batch 2 × gradient accumulation 8 (effective batch 16), learning rate 2e-4, max length 832 tokens (measured from the data; see 8.5), seed 7.
+- **Our settings:** 3 epochs, per-device batch 2 × gradient accumulation 8 (effective batch 16), learning rate 2e-4, max length 832 tokens (measured from the data; see 8.6), seed 7.
 - **AlignTune defaults we kept** (its documented defaults; the learning-rate curve in our logs matches them): AdamW (`adamw_torch`), cosine learning-rate schedule with 10% warm-up, weight decay 0.01; LoRA target modules chosen by AlignTune (`q_proj`, `k_proj`, `v_proj`, `o_proj`). The run used AlignTune throughout; the notebook's plain TRL + PEFT fallback was never needed.
 
 ### 3.3 AuditKIT
@@ -123,8 +123,9 @@ smsgen.py ──► CuratorKIT ──► JSON gate ──► AlignTune (LoRA SFT
 | **Base Aya model** | [`CohereLabs/tiny-aya-global`](https://huggingface.co/CohereLabs/tiny-aya-global), 3.35B parameters, loaded in fp16 (no quantization for training or evaluation), its own chat template, greedy decoding. Licence: **CC-BY-NC 4.0** (non-commercial). |
 | **Our adapter** | LoRA r=16, α=32, dropout 0.05 on q/k/v/o projections ([`Meowniece/tiny-aya-sms-extract-v2-lora`](https://huggingface.co/Meowniece/tiny-aya-sms-extract-v2-lora)). Inherits CC-BY-NC. |
 | **Deployment export** | Merged model as an 8-bit **GGUF** (Q8_0) for llama.cpp ([`Meowniece/tiny-aya-sms-extract-v2-gguf`](https://huggingface.co/Meowniece/tiny-aya-sms-extract-v2-gguf)); not benchmarked yet. |
+| **Comparison base model** | [`CohereLabs/tiny-aya-fire`](https://huggingface.co/CohereLabs/tiny-aya-fire) (South-Asia variant), same pipeline and settings; adapter [`Meowniece/tiny-aya-sms-extract-fire-lora`](https://huggingface.co/Meowniece/tiny-aya-sms-extract-fire-lora). CC-BY-NC 4.0. |
 | **Teacher model** | **None.** There is no distillation: labels come from the data generator and are exact by construction, so no model's mistakes are copied into the training data. |
-| **Closed-model baseline** | Not run (no API budget). We compare cost only, using list prices (section 8.6); accuracy against a closed API is in "With more credits". |
+| **Closed-model baseline** | Not run (no API budget). We compare cost only, using list prices (section 8.7); accuracy against a closed API is in "With more credits". |
 | **Code / data** | Code MIT; data CC-BY-4.0. |
 
 ## 5. Datasets: synthetic, then curated
@@ -232,7 +233,8 @@ Matching is lenient on formatting (case, whitespace, `1,23,456` vs `123456`, Dev
 
 1. Baselines: regex, zero-shot, few-shot (3 fixed exemplars from train).
 2. Main fine-tune (3 epochs) and the ablation (3 epochs, clean data).
-3. An earlier 1-epoch run, identical except for the number of epochs, kept and published as a negative result (section 8.5).
+3. An earlier 1-epoch run, identical except for the number of epochs, kept and published as a negative result (section 8.6).
+4. The same pipeline with **Tiny Aya Fire** as the base model, without the ablation and GGUF export (section 8.4).
 
 ## 8. Results
 
@@ -361,14 +363,35 @@ The hand-written set is small (44 messages), so its interval is wide; the interv
 
 Most frequent remaining errors (fine-tuned, unseen + challenge): type (31), amount (17), counterparty (12), reference (9), currency (9), is_transaction (8), across 58 wrong examples. Every error, with gold and prediction, is in `results/error_analysis_fine_tuned.csv`.
 
-### 8.4 What this means in practice
+### 8.4 Tiny Aya Global vs Tiny Aya Fire
+
+We re-ran the identical pipeline (same data, splits, prompts, LoRA settings, 3 epochs, seed) with **Tiny Aya Fire**, the South-Asia-specialised Tiny Aya model. Only the base model changed. To fit the deadline this run skipped the ablation and the GGUF export.
+
+| Exact match | Seen formats | Unseen formats | Hand-written |
+|---|---|---|---|
+| Few-shot, Global | 26.0 | 21.0 | 25.0 |
+| Few-shot, Fire | 34.3 | 30.3 | 29.5 |
+| **Fine-tuned, Global** | 92.0 | 85.0 | 70.5 |
+| **Fine-tuned, Fire** | **92.7** | **88.7** | **79.5** |
+
+| Fine-tuned model | Hallucination (seen / unseen / hand-written) ↓ | Non-txn F1 (unseen) | Unseen-format EM: en / hi / hinglish | Dev EM | Training answers reproduced |
+|---|---|---|---|---|---|
+| Global | 0.2 / 2.0 / 10.1 | 98.2 | 83.7 / 90.8 / 79.6 | 95.8 | 94% |
+| Fire | 0.3 / 3.1 / 6.6 | 97.0 | 85.7 / 93.6 / 86.0 | 96.7 | 100% |
+
+- **Fire is better at both stages.** It is a stronger starting point (few-shot +5 to +9 points) and ends higher after fine-tuning, most clearly on the hand-written set (+9 points) and on Hinglish (+6.4 points on unseen formats). That fits its South-Asia specialisation.
+- **The gains are modest and partly uncertain.** On the hand-written set, +9 points is 4 messages out of 44, and we did not test the Global-vs-Fire difference for significance. Hallucination is slightly higher for Fire on synthetic test sets and lower on the hand-written set.
+- **Both fine-tunes beat every baseline by a wide margin** (McNemar p < 1e-6 for Fire against regex, zero-shot and few-shot on every split), so the method works with either base model.
+- **Why Global remains the main model in this write-up:** it was chosen before this comparison and has the complete evidence (ablation, GGUF export). The Fire adapter, predictions and logs are published alongside it ([adapter](https://huggingface.co/Meowniece/tiny-aya-sms-extract-fire-lora), [data and predictions](https://huggingface.co/datasets/Meowniece/tiny-aya-sms-extract-fire-data), [results explorer](https://huggingface.co/spaces/Meowniece/tiny-aya-sms-extract-fire-demo)).
+
+### 8.5 What this means in practice
 
 - **Drop-in for an API call:** same input (one SMS), same output (one JSON object); the schema-validity rate shows how often a retry would be needed.
 - **Safer by default:** a lower hallucination rate and higher non-transaction F1 mean fewer phantom transactions and invented balances in users' budgets.
 - **Works for how Indians actually text:** Hindi script, Hinglish, Devanagari digits and Indian number grouping are supported natively, with no transliteration step.
 - **Private:** a 3B model can run on-premise, so no financial SMS has to leave the company's infrastructure.
 
-### 8.5 What didn't work (negative results)
+### 8.6 What didn't work (negative results)
 
 - **First training run: answers cut off.** Tiny Aya's chat template adds a ~400-token default preamble, so training examples are ~754 tokens. With a 512-token limit, every JSON answer was truncated away: 99.8% training token accuracy but ~2% exact match. Fixed by measuring the length from the data; a sanity check now confirms the model reproduces its own training answers.
 - **One epoch underfit.** The 1-epoch model reproduced only 69% of its own training answers and scored 68.7 / 76.7 / 59.1% exact match. Three epochs gave 92.0 / 85.0 / 70.5%. Both runs are published.
@@ -377,7 +400,7 @@ Most frequent remaining errors (fine-tuned, unseen + challenge): type (31), amou
 - **Free Colab** ran out of memory during training twice; all final runs used Kaggle.
 - **A live Gradio demo** needs a paid Hugging Face plan, so the public Space is a static results explorer; the live app is in the GitHub repo.
 
-### 8.6 Cost and compute
+### 8.7 Cost and compute
 
 Scenario: **10,000,000 SMS / month** · avg 276 input + 75 output tokens per SMS
 
@@ -415,7 +438,7 @@ Method: realistic volume (10,000,000 SMS/month) ÷ measured throughput (83 gener
 **Planned approach:**
 1. **A real-world test set:** 300–500 real SMS donated with consent, anonymised, and labelled by two annotators (Hindi and Hinglish native speakers), to measure the gap between synthetic and real messages.
 2. **More varied training data:** more templates per family, LLM-paraphrased variants checked by humans, and more wordings for credits ("salary aa gayi", "refund processed to card"), the main remaining error.
-3. **Loss only on the answer** (not on the 400-token preamble), 2–3 training seeds, and a comparison with **Tiny Aya Fire** (South-Asia specialised).
+3. **Loss only on the answer** (not on the 400-token preamble), 2–3 training seeds, and the ablation and GGUF export for **Tiny Aya Fire**, which did better than Global in our comparison (section 8.4).
 4. **Fast serving** with vLLM, and a CPU benchmark of the GGUF.
 5. **A closed-API accuracy baseline** (e.g. gpt-5-mini) on the same test sets, and a general-capability retention check.
 
@@ -426,7 +449,7 @@ Method: realistic volume (10,000,000 SMS/month) ÷ measured throughput (83 gener
 
 ## 11. Artifacts
 
-- **HF models collection:** https://huggingface.co/collections/Meowniece/tiny-aya-sms-extraction-models-6af9a1a0ced10d8fb22b4ed6 (LoRA adapter, GGUF, ablation adapter)
+- **HF models collection:** https://huggingface.co/collections/Meowniece/tiny-aya-sms-extraction-models-6af9a1a0ced10d8fb22b4ed6 (LoRA adapter, GGUF, ablation adapter, Tiny Aya Fire adapter)
 - **HF datasets collection:** https://huggingface.co/collections/Meowniece/tiny-aya-sms-extraction-datasets-6afa2f2876dd2d18a69a3e77 (all splits, curated training set, every prediction, metrics, training logs, AuditKIT run records, CuratorKIT provenance, figures)
 - **GitHub:** https://github.com/Anshul-Amin/tiny-aya-sms-extract
 - **Demo (results explorer):** https://huggingface.co/spaces/Meowniece/tiny-aya-sms-extract-v2-demo

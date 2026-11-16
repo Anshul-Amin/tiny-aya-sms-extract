@@ -24,6 +24,7 @@ Exact match = all 11 fields correct. Hallucination = a field filled when the SMS
 | Few-shot (same model) | 26.0 | 21.0 | 25.0 | 21.3 |
 | Fine-tuned without robustness data (ablation) | 59.7 | 50.7 | 47.7 | 42.9 |
 | **Fine-tuned (ours)** | **92.0** | **85.0** | **70.5** | **2.0** |
+| Fine-tuned on Tiny Aya Fire (comparison run) | 92.7 | 88.7 | 79.5 | 3.1 |
 
 Valid JSON 99.7–100%; non-transaction F1 98.2% on unseen formats; every improvement is significant (paired McNemar). Full write-up: [`docs/ARTICLE.md`](docs/ARTICLE.md) · abstract: [`docs/ABSTRACT.md`](docs/ABSTRACT.md).
 
