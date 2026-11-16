@@ -374,10 +374,10 @@ We re-ran the identical pipeline (same data, splits, prompts, LoRA settings, 3 e
 | **Fine-tuned, Global** | 92.0 | 85.0 | 70.5 |
 | **Fine-tuned, Fire** | **92.7** | **88.7** | **79.5** |
 
-| Fine-tuned model | Hallucination (seen / unseen / hand-written) ↓ | Non-txn F1 (unseen) | Unseen-format EM: en / hi / hinglish | Dev EM | Training answers reproduced |
-|---|---|---|---|---|---|
-| Global | 0.2 / 2.0 / 10.1 | 98.2 | 83.7 / 90.8 / 79.6 | 95.8 | 94% |
-| Fire | 0.3 / 3.1 / 6.6 | 97.0 | 85.7 / 93.6 / 86.0 | 96.7 | 100% |
+| Fine-tuned model | Hallucination (seen / unseen / hand-written) ↓ | Non-txn F1 (unseen) | Unseen-format EM: en / hi / hinglish | Dev EM | Training answers reproduced | Throughput on a T4 (batch 32) |
+|---|---|---|---|---|---|---|
+| Global | 0.2 / 2.0 / 10.1 | 98.2 | 83.7 / 90.8 / 79.6 | 95.8 | 94% | 1.12 SMS/s · 83 tok/s |
+| Fire | 0.3 / 3.1 / 6.6 | 97.0 | 85.7 / 93.6 / 86.0 | 96.7 | 100% | 1.13 SMS/s · 84 tok/s |
 
 - **Fire is better at both stages.** It is a stronger starting point (few-shot +5 to +9 points) and ends higher after fine-tuning, most clearly on the hand-written set (+9 points) and on Hinglish (+6.4 points on unseen formats). That fits its South-Asia specialisation.
 - **The gains are modest and partly uncertain.** On the hand-written set, +9 points is 4 messages out of 44, and we did not test the Global-vs-Fire difference for significance. Hallucination is slightly higher for Fire on synthetic test sets and lower on the hand-written set.
@@ -407,8 +407,9 @@ Scenario: **10,000,000 SMS / month** · avg 276 input + 75 output tokens per SMS
 | Option | Throughput | GPU hours / month | Cost / month (USD) | Cost / 1M SMS (USD) |
 |---|---|---|---|---|
 | Tiny Aya fine-tuned, self-hosted, pay-per-hour (Tesla T4 @ $0.35/h) | 1.12 SMS/s · 83 tok/s per GPU | 2,490 (≈3.4 T4s running full time) | **871.52** | **87.15** |
-| gpt-5-mini API (list price; excludes reasoning tokens) | – | – | 2,198.59 | 219.86 |
-| gpt-5.4-mini API (list price; excludes reasoning tokens) | – | – | 5,464.01 | 546.40 |
+| Tiny Aya **Fire** fine-tuned, same setup (comparison run, section 8.4) | 1.13 SMS/s · 84 tok/s per GPU | 2,459 (≈3.4 T4s running full time) | 860.81 | 86.08 |
+| gpt-5-mini API (list price; excludes reasoning tokens) | Set by provider rate limits (not measured) | None (provider-hosted) | 2,198.59 | 219.86 |
+| gpt-5.4-mini API (list price; excludes reasoning tokens) | Set by provider rate limits (not measured) | None (provider-hosted) | 5,464.01 | 546.40 |
 
 Throughput is measured, unoptimised Hugging Face `generate` with batch 32 on a free T4; a serving engine (vLLM/TGI) would raise it and cut the self-hosted cost further. One-time fine-tuning cost: about $0.56 (96 min on a T4).
 
