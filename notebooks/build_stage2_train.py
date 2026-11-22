@@ -143,6 +143,12 @@ json.dump(curation, open(f"{WORK}/results/curation_report.json", "w"), indent=1)
 print(json.dumps(curation.get("v3", curation), indent=1, ensure_ascii=False, default=str)[:2500])
 ''', "code")
 
+# ---- regex baseline must not crash on unusual (rephrased / unrelated) text ----
+replace_in('"regex":     lambda xs: [RB.predict(x) for x in xs],', '"regex":     lambda xs: [RB.predict(x) for x in xs],',
+           '"regex":     lambda xs: [_safe_regex(x) for x in xs],')
+replace_in('# Few-shot exemplars: fixed, drawn from TRAIN only', '# Few-shot exemplars: fixed, drawn from TRAIN only',
+           'def _safe_regex(x):\n    try:\n        return RB.predict(x)\n    except Exception:\n        return "{}"   # parser error counts as a wrong answer\n\n# Few-shot exemplars: fixed, drawn from TRAIN only')
+
 # ---- evaluation splits -----------------------------------------------------------------------------
 replace_in('EVAL_SPLITS = ["test_id", "test_ood", "challenge"]', 'EVAL_SPLITS = ["test_id", "test_ood", "challenge"]',
            'EVAL_SPLITS = [s for s in ["test_id", "test_ood", "challenge", "test_id_rephrased", "test_ood_rephrased",\n'

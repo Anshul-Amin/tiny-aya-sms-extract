@@ -113,7 +113,10 @@ def fact_gate(orig_sms: str, new_sms: str, gold: dict) -> tuple[bool, str]:
 
 def meaning_gate(orig_sms: str, new_sms: str) -> tuple[bool, str]:
     """Rule-based reading must agree on is_transaction / type / status."""
-    a, b = RB.parse(orig_sms), RB.parse(new_sms)
+    try:
+        a, b = RB.parse(orig_sms), RB.parse(new_sms)
+    except Exception:          # the rule-based reader cannot parse it: we cannot verify the meaning, so reject
+        return False, "meaning_unverifiable"
     for k in ("is_transaction", "type", "status"):
         if a.get(k) != b.get(k):
             return False, f"meaning_changed_{k}"
@@ -154,7 +157,10 @@ def check_rewrite(row: dict, new_sms: str, existing: set[str]) -> tuple[bool, st
                  lambda: language_gate(row["lang"], new_sms),
                  lambda: fact_gate(row["sms"], new_sms, row["gold"]),
                  lambda: meaning_gate(row["sms"], new_sms)):
-        ok, why = gate()
+        try:
+            ok, why = gate()
+        except Exception as e:  # never let one odd rewrite stop the run
+            return False, f"check_error_{type(e).__name__}"
         if not ok:
             return False, why
     return True, "ok"
