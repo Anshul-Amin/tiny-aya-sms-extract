@@ -165,8 +165,22 @@ code(r'''
 SWAPS = [("debited", "credited"), ("Debited", "Credited"), ("DEBITED", "CREDITED"), ("डेबिट", "क्रेडिट"),
          ("debit hue", "credit hue"), ("debit hua", "credit hua")]
 PREFIX = '{"is_transaction": true, "type": "'
+def full_prompt(sms):
+    return tok.apply_chat_template(build_messages(sms), tokenize=False, add_generation_prompt=True)
+def short_prompt(sms):
+    """The chat prompt without Tiny Aya's ~400-token default preamble (memory on a T4). Everything from our own
+    system prompt onwards is kept exactly as the template renders it."""
+    p = full_prompt(sms)
+    i, j = p.find("<|SYSTEM_TOKEN|>"), p.find(SYSTEM_PROMPT[:60])
+    if i >= 0 and j > i:
+        return p[:i + len("<|SYSTEM_TOKEN|>")] + p[j:]
+    return p
+_ex = splits[TRAIN_FILE][0]["sms"]
+print("prompt tokens: full", len(tok(full_prompt(_ex), add_special_tokens=False)["input_ids"]),
+      "| without default preamble", len(tok(short_prompt(_ex), add_special_tokens=False)["input_ids"]))
+print("short prompt starts:", repr(short_prompt(_ex)[:220]))
 def chat_prompt(sms):
-    return tok.apply_chat_template(build_messages(sms), tokenize=False, add_generation_prompt=True) + PREFIX
+    return short_prompt(sms) + PREFIX
 first = lambda s: tok(s, add_special_tokens=False)["input_ids"]
 d_ids, c_ids = first("debit"), first("credit")
 ANS_CLEAN, ANS_CORR = tok.decode(d_ids[:1]), tok.decode(c_ids[:1])
@@ -184,6 +198,21 @@ for r in cands:
             break
     if len(pairs) >= N_PAIRS: break
 write_jsonl(f"{WORK}/data/circuit_pairs.jsonl", pairs)
+# Sanity check: on these shortened prompts the model must still pick "debit" for the clean SMS and "credit" for the swapped one.
+_m = AutoModelForCausalLM.from_pretrained(MERGED, torch_dtype=torch.float16, device_map={"": 0}).eval()
+ok_clean = ok_corr = 0
+with torch.no_grad():
+    for p_ in pairs[:16]:
+        for key, want in [("clean_prompt", d_ids[0]), ("corrupt_prompt", c_ids[0])]:
+            ids = tok(p_[key], return_tensors="pt", add_special_tokens=False).to(_m.device)
+            logits = _m(**ids).logits[0, -1]
+            hit = int(logits[d_ids[0]] > logits[c_ids[0]]) if want == d_ids[0] else int(logits[c_ids[0]] > logits[d_ids[0]])
+            if key == "clean_prompt": ok_clean += hit
+            else: ok_corr += hit
+n_chk = min(16, len(pairs))
+PAIR_SANITY = {"n": n_chk, "clean_prefers_debit": ok_clean, "corrupt_prefers_credit": ok_corr}
+print("sanity on shortened prompts:", PAIR_SANITY)
+del _m; gc.collect(); torch.cuda.empty_cache()
 print(len(pairs), "aligned pairs | by language:", dict(Counter(p["lang"] for p in pairs)))
 print("example corrupted SMS tail:", pairs[0]["corrupt_prompt"][-260:] if pairs else None)
 ''')
@@ -203,10 +232,22 @@ recs = [ContrastiveRecord(record_id=str(i), clean_prompt=p["clean_prompt"], clea
                           corrupt_prompt=p["corrupt_prompt"], corrupt_answer=p["corrupt_answer"]) for i, p in enumerate(pairs)]
 ds = NormalizedDataset(name="sms_direction", shape=DatasetShape.QA, records=recs)
 register_task(NormalizedTaskSpec(ds, name="sms_direction", templated=True))
+import torch, gc
 model = ck.load_model(merged, dtype="float16")
-circuit = ck.discover(model, "sms_direction", algorithm="eap-ig", level="node", n_examples=len(pairs),
-                      batch_size=1, output_path=f"{W}/results/circuit_sms_direction.pt")
-json.dump({"scores": circuit.scores, "top": circuit.top_nodes(20)}, open(f"{W}/results/circuit_scores.json", "w"), indent=1)
+circuit, used = None, None
+for algo, n in [("eap-ig", len(pairs)), ("eap", len(pairs)), ("eap", min(16, len(pairs)))]:
+    try:
+        circuit = ck.discover(model, "sms_direction", algorithm=algo, level="node", n_examples=n,
+                              batch_size=1, output_path=f"{W}/results/circuit_sms_direction.pt")
+        used = {"algorithm": algo, "n_examples": n}
+        break
+    except Exception as e:
+        print(f"{algo} with {n} examples failed: {str(e)[:200]}")
+        gc.collect(); torch.cuda.empty_cache()
+if circuit is None:
+    raise SystemExit("all discovery settings failed")
+print("discovery settings used:", used)
+json.dump({"scores": circuit.scores, "top": circuit.top_nodes(20), "settings": used}, open(f"{W}/results/circuit_scores.json", "w"), indent=1)
 print("top nodes:", circuit.top_nodes(10))
 """
 open(f"{WORK}/discover.py", "w").write(DISCOVER)
@@ -231,7 +272,7 @@ if RUN_CIRCUITKIT and OK_CK and pairs:
 RANDOM_PROTECT = sorted(random.Random(SEED).sample([i for i in range(N_LAYERS) if i not in PROTECT] or list(range(N_LAYERS)), N_PROTECT))
 print("random-protection control:", RANDOM_PROTECT)
 json.dump({"layer_scores": LAYER_SCORES, "protect": PROTECT, "random_protect": RANDOM_PROTECT, "n_pairs": len(pairs),
-           "circuitkit_ok": CK_OK}, open(f"{WORK}/results/protection.json", "w"), indent=1)
+           "circuitkit_ok": CK_OK, "pair_sanity": PAIR_SANITY}, open(f"{WORK}/results/protection.json", "w"), indent=1)
 ''')
 
 md("## 6. GPU versions (bitsandbytes) and their evaluation")
