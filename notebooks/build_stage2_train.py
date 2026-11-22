@@ -252,6 +252,13 @@ json.dump({"robustness": ROBUST_ROWS, "pairs": {"|".join(k): v for k, v in PAIRS
 print("saved results/stage2_tables.md")
 '''))
 
+# ---- newer peft vs Kaggle's preinstalled torchao ----
+replace_in('pip("peft", "trl", "accelerate", "datasets", "huggingface_hub", "matplotlib", "bitsandbytes")',
+           'pip("peft", "trl", "accelerate", "datasets", "huggingface_hub", "matplotlib", "bitsandbytes")',
+           'pip("peft", "trl", "accelerate", "datasets", "huggingface_hub", "matplotlib", "bitsandbytes")\n'
+           '# newer peft refuses to load with Kaggle\'s older preinstalled torchao (not used here)\n'
+           'subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "-q", "torchao"], capture_output=True)')
+
 # ---- model card title, optional steps guarded ---------------------------------------------------------
 replace_in("MODEL_CARD = f", "# Tiny Aya Global, fine-tuned for Indian bank/UPI SMS → JSON",
            "# {BASE_MODEL.split('/')[-1]} (data v3), fine-tuned for Indian bank/UPI SMS → JSON")

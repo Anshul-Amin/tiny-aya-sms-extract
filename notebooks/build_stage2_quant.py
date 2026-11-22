@@ -104,6 +104,8 @@ if OK_CK:
     print((r.stdout or r.stderr).strip()[-600:])
     OK_CK = r.returncode == 0
 pip("bitsandbytes", "peft", "accelerate", "huggingface_hub", "matplotlib", "sentencepiece", "protobuf", "requests")
+# Newer peft refuses to load when Kaggle's preinstalled torchao is older than it supports; we don't use torchao.
+subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "-q", "torchao"], capture_output=True)
 # check versions in a separate process so this kernel imports transformers only once
 r = subprocess.run([sys.executable, "-c", "import transformers, torch, peft; print(transformers.__version__, torch.__version__, peft.__version__)"],
                    capture_output=True, text=True)
