@@ -146,7 +146,7 @@ print({k: len(v) for k, v in splits.items()}, "| eval:", EVAL_SPLITS)
 md("## 3. Merge the adapter into the base model (fp16)")
 code(r'''
 from peft import PeftModel
-MERGED = f"{WORK}/models/merged_fp16"
+MERGED = "/tmp/merged_fp16"   # big files live outside /kaggle/working (20 GB output limit)
 tok = AutoTokenizer.from_pretrained(BASE_MODEL)
 tok.padding_side = "left"
 if tok.pad_token is None: tok.pad_token = tok.eos_token
@@ -351,12 +351,14 @@ if RUN_GGUF:
         subprocess.run(["cmake", "--build", f"{LC}/build", "-j", "4", "--target", "llama-quantize", "llama-server"],
                        check=True, capture_output=True)
         print(f"llama.cpp built in {(time.time() - t0) / 60:.1f} min")
-        F16 = f"{WORK}/models/sms-f16.gguf"
+        print("free disk: /tmp", round(shutil.disk_usage("/tmp").free / 1e9, 1), "GB | working", round(shutil.disk_usage(WORK).free / 1e9, 1), "GB")
+        os.makedirs("/tmp/gguf", exist_ok=True)
+        F16 = "/tmp/gguf/sms-f16.gguf"
         r = subprocess.run([sys.executable, f"{LC}/convert_hf_to_gguf.py", MERGED, "--outfile", F16, "--outtype", "f16"],
                            capture_output=True, text=True)
         print(r.stderr[-800:])
         def quant(name, qtype, protect=None):
-            out = f"{WORK}/models/tiny-aya-sms-{name}.gguf"
+            out = f"/tmp/gguf/tiny-aya-sms-{name}.gguf"
             cmd = [f"{LC}/build/bin/llama-quantize"]
             if protect:
                 cmd += ["--tensor-type", "blk\\.(" + "|".join(map(str, protect)) + ")\\..*=q8_0"]
