@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this model, data or code, please cite it as below."
+title: "Turning Indian Bank and UPI SMS into Reliable JSON with a Fine-Tuned Small Open Model"
+authors:
+  - family-names: Amin
+    given-names: Anshul J
+year: 2026
+repository-code: "https://github.com/Anshul-Amin/tiny-aya-sms-extract"
+url: "https://huggingface.co/Meowniece/tiny-aya-sms-extract-writeup"
+license: MIT
+keywords:
+  - sms
+  - upi
+  - information extraction
+  - structured output
+  - hindi
+  - hinglish
+  - tiny aya

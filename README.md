@@ -32,6 +32,40 @@ Valid JSON 99.7–100%; non-transaction F1 98.2% on unseen formats; every improv
 
 The `-v2` repos are the submission (3 epochs). The repos without `-v2` hold the earlier 1-epoch run, kept for transparency (exact match 68.7 / 76.7 / 59.1).
 
+## Try it yourself
+Needs a GPU with about 8 GB (free Colab/Kaggle T4 works) and access to the gated Tiny Aya model (accept the licence on its Hugging Face page, then `huggingface-cli login`).
+
+```bash
+git clone https://github.com/Anshul-Amin/tiny-aya-sms-extract && cd tiny-aya-sms-extract
+pip install transformers peft accelerate
+```
+
+```python
+import sys, torch
+sys.path.insert(0, "src")
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from peft import PeftModel
+from smsgen import build_messages        # the exact prompt the model was trained with
+from scoring import extract_json
+
+BASE, ADAPTER = "CohereLabs/tiny-aya-fire", "Meowniece/tiny-aya-sms-extract-fire-lora"
+tok = AutoTokenizer.from_pretrained(BASE)
+model = AutoModelForCausalLM.from_pretrained(BASE, torch_dtype=torch.float16, device_map="auto")
+model = PeftModel.from_pretrained(model, ADAPTER).eval()
+
+def extract(sms):
+    prompt = tok.apply_chat_template(build_messages(sms), tokenize=False, add_generation_prompt=True)
+    ids = tok(prompt, return_tensors="pt", add_special_tokens=False).to(model.device)
+    out = model.generate(**ids, max_new_tokens=200, do_sample=False)
+    return extract_json(tok.decode(out[0, ids["input_ids"].shape[1]:], skip_special_tokens=True))
+
+print(extract("Rs.450.00 debited from A/c XX1234 on 14-11-26 to SWIGGY via UPI. Ref 412398765432. Avl bal Rs.12,340.50"))
+# expected: {'is_transaction': True, 'type': 'debit', 'amount': 450.0, 'currency': 'INR', 'account_last4': '1234', 'instrument': 'UPI',
+#            'counterparty': 'SWIGGY', 'date': '2026-11-14', 'reference': '412398765432', 'balance': 12340.5, 'status': 'success'}
+```
+
+For the Global model use `BASE = "CohereLabs/tiny-aya-global"` and `ADAPTER = "Meowniece/tiny-aya-sms-extract-v2-lora"`. For CPU, use the [GGUF export](https://huggingface.co/Meowniece/tiny-aya-sms-extract-v2-gguf) with llama.cpp.
+
 ## What's different here
 1. **Unseen-format test split:** one template per (family, language) never appears in training.
 2. **Hand-written challenge set:** 44 human-labelled, messy messages in all three languages.
@@ -47,9 +81,11 @@ The `-v2` repos are the submission (3 epochs). The repos without `-v2` hold the 
 | Path | What |
 |---|---|
 | `notebooks/sms_extraction_pipeline.ipynb` | **The whole pipeline** (self-contained; run on Kaggle/Colab T4) |
+| `notebooks/stage2_data.ipynb` | Stage 2 data: fact-checked LLM rewrites (data v3), rephrased test sets, unrelated texts |
 | `src/smsgen.py` | Generator: 111 templates, 14 families × 3 languages, edge-case perturbations, held-out split |
 | `src/scoring.py` | JSON extraction, schema validation, field metrics, hallucination/omission, McNemar, bootstrap |
 | `src/regex_baseline.py` | Rule-based baseline |
+| `src/stage2_data.py` | Stage 2: checks for LLM rewrites (facts, meaning, language), prompts, unrelated-text helpers |
 | `data/challenge_set.py` → `.jsonl` | Hand-written challenge set |
 | `space/` | Gradio live demo (GGUF on CPU, transformers fallback); run locally, or on a Space with HF PRO |
 | `space_static/` | Static results explorer published as the free HF Space |
@@ -70,3 +106,16 @@ Local checks (no GPU): `python tests/test_core.py` and `python tests/dry_run.py`
 
 ## Licences
 Code: MIT. Data: CC-BY-4.0. The model adapter inherits Tiny Aya's **CC-BY-NC** licence (non-commercial). Lexsi toolkits are under their own source-available licences.
+
+## Citation
+If you use this model, data or code, please cite:
+
+```bibtex
+@misc{amin2026tinyayasms,
+  title        = {Turning Indian Bank and UPI SMS into Reliable JSON with a Fine-Tuned Small Open Model},
+  author       = {Amin, Anshul J},
+  year         = {2026},
+  howpublished = {\url{https://github.com/Anshul-Amin/tiny-aya-sms-extract}},
+  note         = {Lexsi AI Safety \& Alignment Hackathon 2026, Track 1}
+}
+```
