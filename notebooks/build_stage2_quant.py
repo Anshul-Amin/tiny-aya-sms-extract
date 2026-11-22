@@ -87,7 +87,22 @@ def secret(name):
         return None
 if secret("HF_TOKEN"): os.environ["HF_TOKEN"] = secret("HF_TOKEN")
 print("HF_TOKEN", "found" if os.environ.get("HF_TOKEN") else "MISSING")
-OK_CK = pip("circuitkit")
+# CircuitKIT needs torch>=2.13 and transformers 5, which would break this kernel's preinstalled stack
+# (torchvision mismatch). So it gets its own virtual environment and runs in a subprocess.
+pip("uv")
+CK_PY = f"{WORK}/ckenv/bin/python"
+def _run(cmd):
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    print(("OK   " if r.returncode == 0 else "FAIL ") + " ".join(cmd[-3:]))
+    if r.returncode: print(r.stderr[-1500:])
+    return r.returncode == 0
+OK_CK = _run([sys.executable, "-m", "uv", "venv", f"{WORK}/ckenv", "--python", sys.executable]) and \
+        _run([sys.executable, "-m", "uv", "pip", "install", "--python", CK_PY, "circuitkit"])
+if OK_CK:
+    r = subprocess.run([CK_PY, "-c", "import torch, circuitkit; print('circuitkit', circuitkit.__version__, '| torch', torch.__version__, '| cuda', torch.cuda.is_available())"],
+                       capture_output=True, text=True)
+    print((r.stdout or r.stderr).strip()[-600:])
+    OK_CK = r.returncode == 0
 pip("bitsandbytes", "peft", "accelerate", "huggingface_hub", "matplotlib", "sentencepiece", "protobuf", "requests")
 # check versions in a separate process so this kernel imports transformers only once
 r = subprocess.run([sys.executable, "-c", "import transformers, torch, peft; print(transformers.__version__, torch.__version__, peft.__version__)"],
@@ -197,7 +212,7 @@ LAYER_SCORES, PROTECT, CK_OK = None, [], False
 if RUN_CIRCUITKIT and OK_CK and pairs:
     t0 = time.time()
     env = dict(os.environ, PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
-    proc = subprocess.run([sys.executable, f"{WORK}/discover.py", WORK, MERGED], capture_output=True, text=True, env=env)
+    proc = subprocess.run([CK_PY, f"{WORK}/discover.py", WORK, MERGED], capture_output=True, text=True, env=env)
     print(proc.stdout[-3000:]); print(proc.stderr[-3000:])
     if proc.returncode == 0 and os.path.exists(f"{WORK}/results/circuit_scores.json"):
         sc = json.load(open(f"{WORK}/results/circuit_scores.json"))["scores"]
