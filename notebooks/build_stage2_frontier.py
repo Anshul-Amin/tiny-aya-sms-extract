@@ -27,7 +27,7 @@ md("""
 
 **Tiny Aya SMS Extract** · Anshul J Amin · Lexsi AI Safety & Alignment Hackathon, Track 1
 
-Can a big general model do this task without fine-tuning? We run **Cohere Command A** (closed, Cohere API) and **Llama 3.3 70B Instruct** (open, Hugging Face Inference Providers) on exactly the same messages as our fine-tuned Tiny Aya: seen formats, unseen formats, hand-written, their rephrased versions and the unrelated texts.
+Can a big general model do this task without fine-tuning? We run **Cohere Command A** (closed; Cohere, served through Hugging Face Inference Providers) and **Llama 3.3 70B Instruct** (open, Hugging Face Inference Providers) on exactly the same messages as our fine-tuned Tiny Aya: seen formats, unseen formats, hand-written, their rephrased versions and the unrelated texts.
 
 Fair setup: the same system prompt with every schema rule, the same three few-shot examples Tiny Aya's few-shot baseline used, JSON mode on, temperature 0. Scoring: the same scorer and **AuditKIT**. We also measure tokens (for cost per 1M SMS) and latency, and compare with Tiny Aya on the same message ids (McNemar).
 
@@ -47,14 +47,17 @@ TINY_AYA_RESULTS_REPO = "Meowniece/tiny-aya-sms-extract-fire-v3-data"   # writte
 SPLITS = ["test_id", "test_ood", "challenge", "test_id_rephrased", "test_ood_rephrased", "challenge_rephrased", "unrelated"]
 SETTINGS = ["few_shot"]          # add "zero_shot" if your budget allows (doubles the calls)
 
-RUN_COMMAND = True
+RUN_COMMAND = False         # Cohere API route (needs a production COHERE_API_KEY)
+RUN_COMMAND_HF = True       # Command A through Hugging Face Inference Providers (Cohere), billed to HF_BILL_TO
+COMMAND_HF = "CohereLabs/c4ai-command-a-03-2025:cohere"
 COMMAND_PREFERENCE = ["command-a-plus-05-2026", "command-a-03-2025"]   # Cohere flagship, auto-detected below
 COMMAND_RPM = 18                                 # trial keys: 20 calls/min and ~1,000 calls/month (not enough for all
                                                  # 1,700 messages: use a production key, or limit SPLITS)
-RUN_OPEN = False          # needs Hugging Face Inference Providers credit (HF returned 402 without it)
+RUN_OPEN = True
 OPEN_MODEL = "meta-llama/Llama-3.3-70B-Instruct"  # Hugging Face Inference Providers
 OPEN_RPM = 60
-HF_BILL_TO = ""                                   # e.g. the hackathon org name, to bill its credits; "" = your account
+COMMAND_HF_RPM = 60
+HF_BILL_TO = "tinyaya-sms-extract"               # HF organisation whose credits pay; "" = your own account
 
 # USD per 1M tokens (input, output). Check the current list prices before reporting.
 PRICES = {"command_a": (2.50, 10.00), "llama_3_3_70b": (0.88, 0.88)}   # Command A list price; update if Command A Plus differs
@@ -139,21 +142,26 @@ def cohere_models():
         return [m["name"] for m in r.json().get("models", [])]
     except Exception as e:
         print("could not list Cohere models:", e); return []
-names = cohere_models()
+names = cohere_models() if RUN_COMMAND else []
 cmd = next((p for p in COMMAND_PREFERENCE if p in names), None) or next(
     (n for n in names if n.startswith("command-a") and not any(x in n for x in ["vision", "reasoning", "translate"])), COMMAND_PREFERENCE[0])
 MODELS = {}
 if RUN_COMMAND:
     MODELS["command_a"] = {"backend": LiteLLMBackend(model=f"cohere_chat/{cmd}", temperature=0.0, max_tokens=300, max_retries=6),
                            "rpm": COMMAND_RPM, "name": cmd}
+def hf_backend(model):
+    return LiteLLMBackend(model=f"openai/{model}", api_base="https://router.huggingface.co/v1",
+                          api_key=os.environ.get("HF_TOKEN"), temperature=0.0, max_tokens=300, max_retries=4)
+if RUN_COMMAND_HF:
+    MODELS["command_a"] = {"backend": hf_backend(COMMAND_HF), "rpm": COMMAND_HF_RPM, "name": COMMAND_HF, "hf": True}
 if RUN_OPEN:
     MODELS["llama_3_3_70b"] = {"backend": LiteLLMBackend(model=f"openai/{OPEN_MODEL}", api_base="https://router.huggingface.co/v1",
                                                          api_key=os.environ.get("HF_TOKEN"), temperature=0.0, max_tokens=300, max_retries=4),
-                               "rpm": OPEN_RPM, "name": OPEN_MODEL}
+                               "rpm": OPEN_RPM, "name": OPEN_MODEL, "hf": True}
 EXTRA = {"extra_headers": {"X-HF-Bill-To": HF_BILL_TO}} if HF_BILL_TO else {}
 for k, m in MODELS.items():
     try:
-        kw = EXTRA if k == "llama_3_3_70b" else {}
+        kw = EXTRA if m.get("hf") else {}
         out = m["backend"].generate([{"role": "user", "content": "Reply with the single word OK."}], max_tokens=5, **kw)
         print(k, m["name"], "-> probe OK:", out.text.strip()[:20])
     except Exception as e:
@@ -215,7 +223,7 @@ RAW = {}
 for mk, m in MODELS.items():
     for setting in SETTINGS:
         for sp in SPLITS:
-            kw = EXTRA if mk == "llama_3_3_70b" else {}
+            kw = EXTRA if m.get("hf") else {}
             RAW[(mk, setting, sp)] = run_llm(f"{mk}_{setting}_{sp}", splits[sp], PROMPTS[setting], m["backend"], m["rpm"], **kw)
 ''')
 

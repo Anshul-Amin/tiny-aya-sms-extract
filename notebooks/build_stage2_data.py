@@ -49,17 +49,23 @@ V2_DATA_REPO   = "Meowniece/tiny-aya-sms-extract-v2-data"
 V3_DATA_REPO   = "Meowniece/tiny-aya-sms-extract-v3-data"
 DATA_COLLECTION = "Meowniece/tiny-aya-sms-extraction-datasets-6afa2f2876dd2d18a69a3e77"
 
-# Training rewrites: Cohere Aya Expanse 32B (auto-detected from your Cohere account below)
+# LLM access. True = Hugging Face Inference Providers, billed to the hackathon organisation's credits.
+# False = Cohere API with COHERE_API_KEY (a trial key allows ~1,000 calls/month).
+USE_HF_ROUTER = True
+HF_BILL_TO = "tinyaya-sms-extract"        # HF organisation whose credits pay for the calls
+REWRITER_HF = "CohereLabs/aya-expanse-32b:cohere"   # Aya Expanse 32B, served by Cohere through HF
+# Training rewrites via the Cohere API (used only when USE_HF_ROUTER = False)
 REWRITER_PREFERENCE = ["c4ai-aya-expanse-32b", "aya-expanse-32b"]
 N_REWRITE = 1600           # training SMS to rewrite (1 call each). A Cohere *trial* key allows ~1,000 calls/month:
                            # with a trial key set this to 700 so that calls remain for the rest of the work.
 COHERE_RPM = 18            # trial keys: 20 chat calls/minute. A production key can use 300+.
+HF_ROUTER_RPM = 60         # Hugging Face Inference Providers
 
 # Test rephrasing: a model that is NOT the training rewriter and NOT a compared system.
 TEST_REPHRASER_HF = "Qwen/Qwen2.5-72B-Instruct"          # via Hugging Face Inference Providers (HF_TOKEN)
 TEST_REPHRASER_FALLBACK = ["command-r-plus-08-2024", "command-r-08-2024", "command-r7b-12-2024"]   # Cohere, used if HF fails;
                                                    # never Command A (a compared system) or Aya Expanse (the training rewriter)
-HF_RPM = 60
+HF_RPM = 60   # test rephraser rate (HF Inference Providers)
 
 DIVERSITY_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 DIVERSITY_THRESHOLD = 0.97  # cosine similarity at or above this = near-duplicate
@@ -145,7 +151,7 @@ print({k: len(v) for k, v in V2.items()})
 ALL_EXISTING = {D.norm(r["sms"]).casefold() for rows in V2.values() for r in rows}
 ''')
 
-md("## 4. LLM backends (CuratorKIT `LiteLLMBackend`)\nThe Cohere models available to your key are listed, and the rewriter is picked from them. The test rephraser is probed; if Hugging Face Inference Providers is unavailable (e.g. no credit), a smaller Cohere Aya model is used instead and this is recorded.")
+md("## 4. LLM backends (CuratorKIT `LiteLLMBackend`)\nBy default every call goes through Hugging Face Inference Providers and is billed to the hackathon organisation (`X-HF-Bill-To`). The training rewriter is Aya Expanse 32B (served by Cohere); the test rephraser is Qwen2.5-72B. Both are probed first, and the run stops early if the rewriter is unreachable.")
 code(r'''
 import requests
 from curatorkit.llm.litellm import LiteLLMBackend
@@ -165,31 +171,43 @@ def pick(names, preferred, contains):
         if all(c in n for c in contains): return n
     return None
 
-COHERE_NAMES = cohere_models()
-print("Cohere chat models:", COHERE_NAMES)
-REWRITER = pick(COHERE_NAMES, REWRITER_PREFERENCE, ["aya-expanse-32b"]) or pick(COHERE_NAMES, [], ["aya-expanse"]) \
-           or REWRITER_PREFERENCE[0]
-print("training rewriter:", REWRITER)
-rewriter = LiteLLMBackend(model=f"cohere_chat/{REWRITER}", temperature=0.9, max_tokens=300, max_retries=6)
+COHERE_NAMES = cohere_models() if not USE_HF_ROUTER else []
+EXTRA = {"extra_headers": {"X-HF-Bill-To": HF_BILL_TO}} if (USE_HF_ROUTER and HF_BILL_TO) else {}
+def hf_backend(model, temperature):
+    return LiteLLMBackend(model=f"openai/{model}", api_base="https://router.huggingface.co/v1",
+                          api_key=os.environ.get("HF_TOKEN"), temperature=temperature, max_tokens=300, max_retries=4)
 
-def probe(backend):
+def probe(backend, extra=None):
     try:
-        out = backend.generate([{"role": "user", "content": "Reply with the single word OK."}], max_tokens=5)
+        out = backend.generate([{"role": "user", "content": "Reply with the single word OK."}], max_tokens=5, **(extra or {}))
         return bool(out.text.strip()), out.text.strip()[:40]
     except Exception as e:
-        return False, f"{type(e).__name__}: {str(e)[:200]}"
+        return False, f"{type(e).__name__}: {str(e)[:300]}"
 
-print("rewriter probe:", probe(rewriter))
-rephraser = LiteLLMBackend(model=f"openai/{TEST_REPHRASER_HF}", api_base="https://router.huggingface.co/v1",
-                           api_key=os.environ.get("HF_TOKEN"), temperature=0.7, max_tokens=300, max_retries=4)
-ok, msg = probe(rephraser)
-REPHRASER, REPHRASER_RPM = TEST_REPHRASER_HF, HF_RPM
+if USE_HF_ROUTER:
+    REWRITER, REWRITE_RPM, RW_EXTRA = REWRITER_HF, HF_ROUTER_RPM, EXTRA
+    rewriter = hf_backend(REWRITER_HF, 0.9)
+else:
+    print("Cohere chat models:", COHERE_NAMES)
+    REWRITER = pick(COHERE_NAMES, REWRITER_PREFERENCE, ["aya-expanse-32b"]) or pick(COHERE_NAMES, [], ["aya-expanse"]) \
+               or REWRITER_PREFERENCE[0]
+    REWRITE_RPM, RW_EXTRA = COHERE_RPM, {}
+    rewriter = LiteLLMBackend(model=f"cohere_chat/{REWRITER}", temperature=0.9, max_tokens=300, max_retries=6)
+ok, msg = probe(rewriter, RW_EXTRA)
+print("training rewriter:", REWRITER, "| billed to:", HF_BILL_TO if RW_EXTRA else "Cohere key", "| probe:", ok, msg)
 if not ok:
+    raise RuntimeError("The training rewriter is not reachable; fix access before spending a run: " + msg)
+
+rephraser = hf_backend(TEST_REPHRASER_HF, 0.7)
+REPHRASER, REPHRASER_RPM, RP_EXTRA = TEST_REPHRASER_HF, HF_RPM, EXTRA
+ok, msg = probe(rephraser, RP_EXTRA)
+if not ok:
+    COHERE_NAMES = COHERE_NAMES or cohere_models()
     fb = pick(COHERE_NAMES, TEST_REPHRASER_FALLBACK, ["command-r"]) or TEST_REPHRASER_FALLBACK[0]
     print(f"HF Inference Providers unavailable ({msg}) -> test rephraser falls back to Cohere {fb}")
     rephraser = LiteLLMBackend(model=f"cohere_chat/{fb}", temperature=0.7, max_tokens=300, max_retries=6)
-    REPHRASER, REPHRASER_RPM = fb, COHERE_RPM
-REPHRASE_OK, _msg = probe(rephraser)
+    REPHRASER, REPHRASER_RPM, RP_EXTRA = fb, COHERE_RPM, {}
+REPHRASE_OK, _msg = probe(rephraser, RP_EXTRA)
 print("test rephraser:", REPHRASER, "| probe:", REPHRASE_OK, _msg)
 if not REPHRASE_OK:
     print("⚠️ no working test rephraser: the rephrased test sets will be skipped (everything else still runs)")
@@ -205,7 +223,7 @@ class RateLimiter:
             t = max(self.next, time.time()); self.next = t + self.dt
         time.sleep(max(0.0, t - time.time()))
 
-def run_llm(task, items, make_messages, backend, rpm, temperature, workers=6):
+def run_llm(task, items, make_messages, backend, rpm, temperature, workers=6, **gen_kwargs):
     path = f"{WORK}/cache/{task}.jsonl"
     cache = {}
     if os.path.exists(path):
@@ -218,7 +236,7 @@ def run_llm(task, items, make_messages, backend, rpm, temperature, workers=6):
     def one(it):
         lim.wait()
         try:
-            r = backend.generate(make_messages(it), temperature=temperature)
+            r = backend.generate(make_messages(it), temperature=temperature, **gen_kwargs)
             rec = {"id": it["id"], "text": r.text, "model": backend.model, "tokens_in": r.prompt_tokens,
                    "tokens_out": r.completion_tokens, "error": None}
         except Exception as e:
@@ -246,7 +264,7 @@ rng = random.Random(SEED)
 src_rows = list(V2["train"]); rng.shuffle(src_rows)
 src_rows = src_rows[:N_REWRITE]
 make_rw = lambda r: D.train_rewrite_messages(r, random.Random(f"{SEED}-{r['id']}"))
-rw_out = run_llm("train_rewrites", src_rows, make_rw, rewriter, COHERE_RPM, temperature=0.9)
+rw_out = run_llm("train_rewrites", src_rows, make_rw, rewriter, REWRITE_RPM, temperature=0.9, workers=8, **RW_EXTRA)
 
 COUNTS = {"v3": {}}
 rewrite_log, accepted, existing = [], [], set(ALL_EXISTING)
@@ -346,7 +364,7 @@ train_texts = {D.norm(r["sms"]).casefold() for r in train_v3} | {D.norm(r["sms"]
 REPHRASED, COUNTS["rephrase"] = {}, {}
 for split in (["test_id", "test_ood", "challenge"] if REPHRASE_OK else []):
     rows = V2[split][:N_TEST_PER_SPLIT] if N_TEST_PER_SPLIT else V2[split]
-    out1 = run_llm(f"rephrase_{split}", rows, D.test_rephrase_messages, rephraser, REPHRASER_RPM, temperature=0.7)
+    out1 = run_llm(f"rephrase_{split}", rows, D.test_rephrase_messages, rephraser, REPHRASER_RPM, temperature=0.7, workers=8, **RP_EXTRA)
     kept, reasons, failed = {}, Counter(), []
     def try_accept(r, rec, round_):
         txt = D.clean_llm_text(rec["text"]) if rec else ""
@@ -359,7 +377,7 @@ for split in (["test_id", "test_ood", "challenge"] if REPHRASE_OK else []):
         why = try_accept(r, out1.get(r["id"]), 1)
         if why != "ok": failed.append(r)
     # second chance at a lower temperature for the ones that failed a check
-    out2 = run_llm(f"rephrase_{split}_r2", failed, D.test_rephrase_messages, rephraser, REPHRASER_RPM, temperature=0.2) if failed else {}
+    out2 = run_llm(f"rephrase_{split}_r2", failed, D.test_rephrase_messages, rephraser, REPHRASER_RPM, temperature=0.2, workers=8, **RP_EXTRA) if failed else {}
     for r in failed:
         reasons[try_accept(r, out2.get(r["id"]), 2)] += 1
     reasons["ok"] += len(rows) - len(failed)
