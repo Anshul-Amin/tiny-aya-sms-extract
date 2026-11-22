@@ -47,7 +47,8 @@ QUICK_MODE = True
 SEED = 7
 BASE_MODEL   = "CohereLabs/tiny-aya-fire"
 ADAPTER_REPO = "Meowniece/tiny-aya-sms-extract-fire-lora"      # switch to the -fire-v3-lora repo if v3 wins (decision rule)
-DATA_REPO    = "Meowniece/tiny-aya-sms-extract-v3-data"
+DATA_REPO    = "Meowniece/tiny-aya-sms-extract-v2-data"   # Stage 1 splits (identical test sets in v3)
+TRAIN_FILE   = "train"
 QUANT_REPO   = "Meowniece/tiny-aya-sms-extract-quantized"
 MODEL_COLLECTION = "Meowniece/tiny-aya-sms-extraction-models-6af9a1a0ced10d8fb22b4ed6"
 PUSH_TO_HUB  = True
@@ -57,7 +58,7 @@ N_PROTECT   = 4       # layers kept at higher precision (of 36)
 RUN_CIRCUITKIT = True
 RUN_GGUF    = True    # llama.cpp build + GGUF tiers (CPU evaluation)
 GGUF_EVAL_N = 44      # SMS per GGUF version (CPU is slow); the hand-written set by default
-EVAL_SPLITS = ["test_ood", "challenge", "test_ood_rephrased", "challenge_rephrased"]
+EVAL_SPLITS = ["test_ood", "challenge"]
 GEN_BATCH, MAX_NEW = 16, 200
 
 if QUICK_MODE:
@@ -114,14 +115,14 @@ def write_jsonl(path, rows):
     with open(path, "w", encoding="utf-8") as f:
         for r in rows: f.write(json.dumps(r, ensure_ascii=False) + "\n")
 splits = {}
-for name in ["train_v3"] + EVAL_SPLITS:
+for name in [TRAIN_FILE] + EVAL_SPLITS:
     try:
         splits[name] = load_jsonl(hf_hub_download(DATA_REPO, f"data/{name}.jsonl", repo_type="dataset"))
     except Exception as e:
         print(name, "not available:", str(e)[:80])
 EVAL_SPLITS = [s for s in EVAL_SPLITS if splits.get(s)]
 if QUICK_MODE:
-    splits = {k: (v if k == "train_v3" else v[:6]) for k, v in splits.items()}
+    splits = {k: (v if k == TRAIN_FILE else v[:6]) for k, v in splits.items()}
 print({k: len(v) for k, v in splits.items()}, "| eval:", EVAL_SPLITS)
 ''')
 
@@ -154,7 +155,7 @@ d_ids, c_ids = first("debit"), first("credit")
 ANS_CLEAN, ANS_CORR = tok.decode(d_ids[:1]), tok.decode(c_ids[:1])
 print("answer tokens:", d_ids, c_ids, "->", repr(ANS_CLEAN), repr(ANS_CORR))
 pairs, rng = [], random.Random(SEED)
-cands = [r for r in splits["train_v3"] if r["gold"]["is_transaction"] and r["gold"]["type"] == "debit"]
+cands = [r for r in splits[TRAIN_FILE] if r["gold"]["is_transaction"] and r["gold"]["type"] == "debit"]
 rng.shuffle(cands)
 for r in cands:
     for a, b in SWAPS:
