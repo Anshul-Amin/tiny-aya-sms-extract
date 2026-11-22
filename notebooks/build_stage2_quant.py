@@ -253,6 +253,10 @@ print("top nodes:", circuit.top_nodes(10))
 open(f"{WORK}/discover.py", "w").write(DISCOVER)
 LAYER_SCORES, PROTECT, CK_OK = None, [], False
 if RUN_CIRCUITKIT and OK_CK and pairs:
+    for _v in ["_m", "logits", "ids"]:
+        globals().pop(_v, None)
+    gc.collect(); torch.cuda.empty_cache()
+    print(f"GPU memory held by this kernel before discovery: {torch.cuda.memory_reserved() / 1e9:.2f} GB")
     t0 = time.time()
     env = dict(os.environ, PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
     proc = subprocess.run([CK_PY, f"{WORK}/discover.py", WORK, MERGED], capture_output=True, text=True, env=env)
@@ -380,10 +384,21 @@ if RUN_GGUF:
 
 code(r'''
 import requests
+try:
+    CPU_THREADS = len(os.sched_getaffinity(0))
+except Exception:
+    CPU_THREADS = os.cpu_count() or 4
+try:   # containers often report the host's cores; respect the cgroup CPU quota if there is one
+    q, per = open("/sys/fs/cgroup/cpu.max").read().split()[:2]
+    if q != "max":
+        CPU_THREADS = max(1, min(CPU_THREADS, int(int(q) / int(per))))
+except Exception:
+    pass
+print("llama.cpp CPU threads:", CPU_THREADS)
 def eval_gguf(name, info, rows):
     port = 8099
     srv = subprocess.Popen([f"{WORK}/llama.cpp/build/bin/llama-server", "-m", info["path"], "--port", str(port),
-                            "-c", "2048", "-t", str(os.cpu_count() or 4), "--no-webui"],
+                            "-c", "2048", "-t", str(CPU_THREADS), "--no-webui"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         for _ in range(120):
@@ -394,6 +409,8 @@ def eval_gguf(name, info, rows):
         outs, t0 = [], time.time()
         for r in rows:
             prompt = tok.apply_chat_template(build_messages(r["sms"]), tokenize=False, add_generation_prompt=True)
+            if tok.bos_token and prompt.startswith(tok.bos_token):
+                prompt = prompt[len(tok.bos_token):]   # llama-server adds BOS itself; a second one hurts accuracy
             js = requests.post(f"http://127.0.0.1:{port}/completion", json={"prompt": prompt, "n_predict": MAX_NEW,
                                "temperature": 0, "cache_prompt": True}, timeout=600).json()
             outs.append(js.get("content", ""))
@@ -417,8 +434,9 @@ for name, info in GGUF.items():
 
 md("## 8. Results: size vs accuracy")
 code(r'''
+GPU_NAME = torch.cuda.get_device_name(0).replace("NVIDIA ", "") if torch.cuda.is_available() else "CPU"
 def pct(x): return "–" if x is None or (isinstance(x, float) and x != x) else f"{100 * x:.1f}"
-lines = ["| Version | Precision | Size (GB) | Fits GPU | " + " | ".join(f"{sp} EM [95% CI]" for sp in EVAL_SPLITS) + " | SMS/s (T4) |",
+lines = ["| Version | Precision | Size (GB) | Fits GPU | " + " | ".join(f"{sp} EM [95% CI]" for sp in EVAL_SPLITS) + f" | SMS/s ({GPU_NAME}) |",
          "|---|---|---|---|" + "---|" * len(EVAL_SPLITS) + "---|"]
 def tier(gb):
     return "–" if gb is None else ("2 GB" if gb + 0.3 <= 2 else "4 GB" if gb + 0.4 <= 4 else "8 GB" if gb + 0.6 <= 8 else "16 GB")
