@@ -57,7 +57,8 @@ COHERE_RPM = 18            # trial keys: 20 chat calls/minute. A production key 
 
 # Test rephrasing: a model that is NOT the training rewriter and NOT a compared system.
 TEST_REPHRASER_HF = "Qwen/Qwen2.5-72B-Instruct"          # via Hugging Face Inference Providers (HF_TOKEN)
-TEST_REPHRASER_FALLBACK = ["c4ai-aya-expanse-8b", "aya-expanse-8b"]   # Cohere, used only if HF fails
+TEST_REPHRASER_FALLBACK = ["command-r-plus-08-2024", "command-r-08-2024", "command-r7b-12-2024"]   # Cohere, used if HF fails;
+                                                   # never Command A (a compared system) or Aya Expanse (the training rewriter)
 HF_RPM = 60
 
 DIVERSITY_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
@@ -184,11 +185,14 @@ rephraser = LiteLLMBackend(model=f"openai/{TEST_REPHRASER_HF}", api_base="https:
 ok, msg = probe(rephraser)
 REPHRASER, REPHRASER_RPM = TEST_REPHRASER_HF, HF_RPM
 if not ok:
-    fb = pick(COHERE_NAMES, TEST_REPHRASER_FALLBACK, ["aya-expanse-8b"]) or TEST_REPHRASER_FALLBACK[0]
+    fb = pick(COHERE_NAMES, TEST_REPHRASER_FALLBACK, ["command-r"]) or TEST_REPHRASER_FALLBACK[0]
     print(f"HF Inference Providers unavailable ({msg}) -> test rephraser falls back to Cohere {fb}")
     rephraser = LiteLLMBackend(model=f"cohere_chat/{fb}", temperature=0.7, max_tokens=300, max_retries=6)
     REPHRASER, REPHRASER_RPM = fb, COHERE_RPM
-print("test rephraser:", REPHRASER, "| probe:", probe(rephraser))
+REPHRASE_OK, _msg = probe(rephraser)
+print("test rephraser:", REPHRASER, "| probe:", REPHRASE_OK, _msg)
+if not REPHRASE_OK:
+    print("⚠️ no working test rephraser: the rephrased test sets will be skipped (everything else still runs)")
 ''')
 
 md("## 5. Rate-limited, cached LLM runner\nEvery response is appended to a cache file, so a re-run (or a crash) never pays for the same call twice.")
@@ -340,7 +344,7 @@ md("## 8. Rephrased test sets (different model, same checks)")
 code(r'''
 train_texts = {D.norm(r["sms"]).casefold() for r in train_v3} | {D.norm(r["sms"]).casefold() for r in V2["dev"]}
 REPHRASED, COUNTS["rephrase"] = {}, {}
-for split in ["test_id", "test_ood", "challenge"]:
+for split in (["test_id", "test_ood", "challenge"] if REPHRASE_OK else []):
     rows = V2[split][:N_TEST_PER_SPLIT] if N_TEST_PER_SPLIT else V2[split]
     out1 = run_llm(f"rephrase_{split}", rows, D.test_rephrase_messages, rephraser, REPHRASER_RPM, temperature=0.7)
     kept, reasons, failed = {}, Counter(), []
@@ -475,7 +479,8 @@ if PUSH_TO_HUB and not QUICK_MODE:
     os.makedirs(f"{stage}/data"); os.makedirs(f"{stage}/results")
     for f in ["train_v3.jsonl", "rewrites_log.jsonl", "unrelated.jsonl", "test_id_rephrased.jsonl",
               "test_ood_rephrased.jsonl", "challenge_rephrased.jsonl"]:
-        shutil.copy(f"{WORK}/data/{f}", f"{stage}/data/{f}")
+        if os.path.exists(f"{WORK}/data/{f}"):
+            shutil.copy(f"{WORK}/data/{f}", f"{stage}/data/{f}")
     for name in ["dev", "test_id", "test_ood", "challenge"]:
         write_jsonl(f"{stage}/data/{name}.jsonl", V2[name])
     for f in ["filter_tables.md", "filter_counts.json"]:

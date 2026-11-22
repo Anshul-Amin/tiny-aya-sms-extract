@@ -25,6 +25,7 @@ NUM_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
 URL_RE = re.compile(r"https?://|www\.|\.com\b|\.in/|bit\.ly", re.I)
 DEVANAGARI_RE = re.compile(r"[ऀ-ॿ]")
 LATIN_RE = re.compile(r"[A-Za-z]")
+PLACEHOLDER_RE = re.compile(r"bank name|your bank|बैंक नाम|bank ka naam|xxx bank", re.I)
 
 INSTRUMENT_KEYWORDS = {
     "UPI": ["upi", "यूपीआई", "vpa", "@"],
@@ -139,6 +140,9 @@ def hygiene_gate(orig_sms: str, new_sms: str, existing: set[str]) -> tuple[bool,
         return False, "has_link"
     if n.casefold() == norm(orig_sms).casefold():
         return False, "unchanged"
+    o = norm(orig_sms)
+    if any(ch in n and ch not in o for ch in "[]<>{}") or PLACEHOLDER_RE.search(n):
+        return False, "placeholder"
     if n.casefold() in existing:
         return False, "duplicate_or_leak"
     return True, "ok"

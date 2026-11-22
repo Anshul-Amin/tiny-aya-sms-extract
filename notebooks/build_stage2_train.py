@@ -84,7 +84,12 @@ def write_jsonl(path, rows):
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
 def load_v3(name):
-    p = hf_hub_download(V3_DATA_REPO, f"data/{name}.jsonl", repo_type="dataset")
+    try:
+        p = hf_hub_download(V3_DATA_REPO, f"data/{name}.jsonl", repo_type="dataset")
+    except Exception as e:
+        if name.endswith("rephrased"):
+            print(f"{name}: not available ({str(e)[:80]}), skipped"); return []
+        raise
     return [json.loads(l) for l in open(p, encoding="utf-8") if l.strip()]
 
 files = {"train": "train_v3", "dev": "dev", "test_id": "test_id", "test_ood": "test_ood", "challenge": "challenge",

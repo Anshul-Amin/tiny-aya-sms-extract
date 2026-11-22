@@ -48,16 +48,16 @@ SPLITS = ["test_id", "test_ood", "challenge", "test_id_rephrased", "test_ood_rep
 SETTINGS = ["few_shot"]          # add "zero_shot" if your budget allows (doubles the calls)
 
 RUN_COMMAND = True
-COMMAND_PREFERENCE = ["command-a-03-2025"]      # auto-detected from your Cohere account below
+COMMAND_PREFERENCE = ["command-a-plus-05-2026", "command-a-03-2025"]   # Cohere flagship, auto-detected below
 COMMAND_RPM = 18                                 # trial keys: 20 calls/min and ~1,000 calls/month (not enough for all
                                                  # 1,700 messages: use a production key, or limit SPLITS)
-RUN_OPEN = True
+RUN_OPEN = False          # needs Hugging Face Inference Providers credit (HF returned 402 without it)
 OPEN_MODEL = "meta-llama/Llama-3.3-70B-Instruct"  # Hugging Face Inference Providers
 OPEN_RPM = 60
 HF_BILL_TO = ""                                   # e.g. the hackathon org name, to bill its credits; "" = your account
 
 # USD per 1M tokens (input, output). Check the current list prices before reporting.
-PRICES = {"command_a": (2.50, 10.00), "llama_3_3_70b": (0.88, 0.88)}
+PRICES = {"command_a": (2.50, 10.00), "llama_3_3_70b": (0.88, 0.88)}   # Command A list price; update if Command A Plus differs
 
 WORK = "/kaggle/working" if os.path.isdir("/kaggle/working") else os.path.abspath("work_frontier")
 for d in ["src", "data", "results", "cache"]:
