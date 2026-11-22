@@ -41,6 +41,8 @@ SCRIPT = f"""
 set -e
 (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq {APT_PACKAGES}) > /dev/null 2>&1 || echo "apt-get failed"
 pip install -q nbconvert ipykernel huggingface_hub
+# Kaggle images ship these; the plain PyTorch image does not (or has them too old)
+pip install -q -U "jinja2>=3.1.6" requests matplotlib pandas
 python - <<'PY'
 import urllib.request; urllib.request.urlretrieve("{NOTEBOOK_URL}", "nb.ipynb")
 PY
