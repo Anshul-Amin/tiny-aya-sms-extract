@@ -27,6 +27,7 @@ TIMEOUT      = "10h"
 NAMESPACE    = "tinyaya-sms-extract"
 IMAGE        = "pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel"
 RESULTS_REPO = "Meowniece/tiny-aya-sms-extract-v3-data"
+APT_PACKAGES = "git"             # system packages the notebook needs (quantization: "git cmake build-essential")
 ''')
 
 code(r'''
@@ -38,6 +39,7 @@ TOKEN = UserSecretsClient().get_secret("HF_TOKEN")
 
 SCRIPT = f"""
 set -e
+(apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq {APT_PACKAGES}) > /dev/null 2>&1 || echo "apt-get failed"
 pip install -q nbconvert ipykernel huggingface_hub
 python - <<'PY'
 import urllib.request; urllib.request.urlretrieve("{NOTEBOOK_URL}", "nb.ipynb")
